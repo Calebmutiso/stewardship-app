@@ -1,0 +1,24 @@
+{
+  "name": "Daily Stewardship",
+  "short_name": "Stewardship",
+  "description": "Kingdom First — Daily life management app",
+  "start_url": "./StewardshipApp.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#060B14",
+  "theme_color": "#00D4FF",
+  "icons": [
+    {
+      "src": "https://via.placeholder.com/192x192/060B14/00D4FF?text=S",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://via.placeholder.com/512x512/060B14/00D4FF?text=S",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
