@@ -1,0 +1,2065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<title>Daily Stewardship</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800;1,9..40,400&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;font-family:'DM Sans',sans-serif;}
+html,body,#root{height:100%;width:100%;background:#060B14;}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes twinkle{0%,100%{opacity:.08;}50%{opacity:.45;}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes slideIn{from{transform:translateX(-100%);}to{transform:translateX(0);}}
+.task-card{animation:fadeUp .4s ease both;}
+.item-card{animation:fadeUp .35s ease both;}
+.home-card:active{transform:scale(0.95)!important;filter:brightness(1.1);}
+.item-card:active{transform:scale(0.97)!important;}
+.fab:active{transform:scale(0.93)!important;}
+.glass-header{backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);}
+::-webkit-scrollbar{display:none;}
+input{outline:none;border:none;}
+button{font-family:'DM Sans',sans-serif;cursor:pointer;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useRef}=React;
+
+// ── STORAGE (uses localStorage since window.storage not available standalone) ──
+const sg=async k=>{try{const v=localStorage.getItem(k);return v?{value:v}:null;}catch{return null;}};
+const ss=async(k,v)=>{try{localStorage.setItem(k,v);}catch{}};
+
+// ── GOOGLE SHEETS BACKUP ──────────────────────────────────────────────────
+const BACKUP_URL="https://script.google.com/macros/s/AKfycbynJ6Tm_AyhjfhgzZp6OYvr1RxZLK4mvnFjsz-LASFoxUpappyRlHH1L5AVR22OLPWSoQ/exec";
+
+async function backupToSheets(){
+  try{
+    const allKeys=Object.keys(localStorage);
+    // Daily progress
+    const daily_progress=[];
+    allKeys.filter(k=>k.startsWith("checked-")).forEach(k=>{
+      const date=k.replace("checked-","");
+      let data={};try{data=JSON.parse(localStorage.getItem(k)||"{}");}catch{}
+      Object.entries(data).forEach(([taskKey,completed])=>{
+        if(completed){
+          const parts=taskKey.split("-");
+          daily_progress.push({date,item_id:parts[0],task_id:parts.slice(1).join("-"),completed});
+        }
+      });
+    });
+    // Savings goals
+    let savings_goals=[];try{savings_goals=JSON.parse(localStorage.getItem("savingsgoals")||"[]");}catch{}
+    // Shopping list
+    let shopping_list=[];try{shopping_list=JSON.parse(localStorage.getItem("shoplist")||"[]");}catch{}
+    // Devotion notes
+    const devotion_notes=[];
+    allKeys.filter(k=>k.startsWith("devot-note-")).forEach(k=>{
+      const date=k.replace("devot-note-","");
+      const note=localStorage.getItem(k);
+      let doneCount=0;
+      try{const d=JSON.parse(localStorage.getItem("devot-done")||"{}");doneCount=Object.keys(d).filter(dk=>dk.includes(date)).length;}catch{}
+      if(note)devotion_notes.push({date,plan_day:0,note,tracks_completed:doneCount});
+    });
+    // Custom items
+    const custom_items=[];
+    try{
+      const ci=JSON.parse(localStorage.getItem("catItems-v1")||"{}");
+      Object.entries(ci).forEach(([cat_id,items])=>{
+        items.filter(it=>String(it.id).startsWith("c-")).forEach(it=>{
+          custom_items.push({cat_id,id:it.id,label:it.label,icon:it.icon});
+        });
+      });
+    }catch{}
+    const payload={action:"backup_all",daily_progress,savings_goals,shopping_list,devotion_notes,custom_items};
+    const res=await fetch(BACKUP_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const result=await res.json();
+    return result.success;
+  }catch(err){console.error("Backup failed:",err);return false;}
+}
+
+async function restoreFromSheets(){
+  try{
+    const res=await fetch(BACKUP_URL+"?action=restore");
+    const result=await res.json();
+    if(!result.success)return false;
+    const data=result.data;
+    if(data.savings_goals?.length)localStorage.setItem("savingsgoals",JSON.stringify(data.savings_goals));
+    if(data.shopping_list?.length)localStorage.setItem("shoplist",JSON.stringify(data.shopping_list));
+    data.devotion_notes?.forEach(n=>{if(n.note)localStorage.setItem("devot-note-"+n.date,n.note);});
+    if(data.custom_items?.length){
+      let ci={};try{ci=JSON.parse(localStorage.getItem("catItems-v1")||"{}");}catch{}
+      data.custom_items.forEach(it=>{
+        if(!ci[it.cat_id])ci[it.cat_id]=[];
+        if(!ci[it.cat_id].find(x=>x.id===it.id))ci[it.cat_id].push({id:it.id,label:it.label,icon:it.icon,color:"#00D4FF",desc:"Restored item"});
+      });
+      localStorage.setItem("catItems-v1",JSON.stringify(ci));
+    }
+    return true;
+  }catch(err){console.error("Restore failed:",err);return false;}
+}
+
+// Silent auto-backup 4 seconds after app loads
+window.addEventListener("load",()=>setTimeout(()=>backupToSheets(),4000));
+// Backup when leaving
+window.addEventListener("beforeunload",()=>backupToSheets());
+
+// ── DATA ──────────────────────────────────────────────────────────────────────
+const DAYS=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const VERSES=[
+  {ref:"Matthew 6:33",text:"Seek first his kingdom and his righteousness, and all these things will be given to you as well."},
+  {ref:"Proverbs 16:3",text:"Commit to the LORD whatever you do, and he will establish your plans."},
+  {ref:"Colossians 3:23",text:"Whatever you do, work at it with all your heart, as working for the Lord."},
+  {ref:"Joshua 1:8",text:"Meditate on it day and night, so that you may be careful to do everything written in it."},
+  {ref:"Philippians 4:13",text:"I can do all this through him who gives me strength."},
+  {ref:"Proverbs 3:5-6",text:"Trust in the LORD with all your heart and lean not on your own understanding."},
+  {ref:"Jeremiah 29:11",text:"For I know the plans I have for you — plans to prosper you and not to harm you."},
+];
+
+// ── THEMES ────────────────────────────────────────────────────────────────────
+const DARK={
+  bg:"#060B14",surface:"#0D1520",surface2:"#121C2E",border:"#1A2640",
+  accent:"#00D4FF",accentDim:"#00D4FF88",accentFaint:"#00D4FF15",
+  text:"#E8F4FF",textSub:"#7A9CC0",textMuted:"#3A5A7A",textFaint:"#1E3550",
+  headerBg:"rgba(8,14,26,0.82)",greetingBg:"rgba(13,21,32,0.65)",greetingBorder:"rgba(0,212,255,0.15)",
+  itemCardBg:"rgba(13,21,32,0.70)",sidebarBg:"rgba(6,11,20,0.92)",
+  taskBg:"rgba(13,21,32,0.72)",taskDoneBg:"rgba(8,14,26,0.50)",
+  inputBg:"rgba(18,28,46,0.65)",inputBorder:"rgba(0,212,255,0.20)",
+  glassBorder:"rgba(0,212,255,0.12)",glassBorderStrong:"rgba(0,212,255,0.24)",
+  verseGrad:["#4A1A8A","#00D4FF"],cardShadow:"0 4px 24px rgba(0,0,0,.5)",
+  btnBg:"rgba(18,28,46,0.75)",overlayBg:"rgba(0,6,14,0.75)",
+};
+const LIGHT={
+  bg:"#F0F4F8",surface:"#FFFFFF",surface2:"#EEF2F7",border:"#D0D8E4",
+  accent:"#0088BB",accentDim:"#0088BB88",accentFaint:"#0088BB12",
+  text:"#0F1E2E",textSub:"#3A5A7A",textMuted:"#7A96B0",textFaint:"#B0C4D8",
+  headerBg:"rgba(255,255,255,0.88)",greetingBg:"rgba(255,255,255,0.82)",greetingBorder:"rgba(0,136,187,0.18)",
+  itemCardBg:"rgba(255,255,255,0.82)",sidebarBg:"rgba(255,255,255,0.96)",
+  taskBg:"rgba(255,255,255,0.85)",taskDoneBg:"rgba(240,244,248,0.70)",
+  inputBg:"rgba(255,255,255,0.85)",inputBorder:"rgba(0,136,187,0.22)",
+  glassBorder:"rgba(0,136,187,0.14)",glassBorderStrong:"rgba(0,136,187,0.28)",
+  verseGrad:["#5B21B6","#0088BB"],cardShadow:"0 4px 20px rgba(0,0,0,.08)",
+  btnBg:"rgba(255,255,255,0.82)",overlayBg:"rgba(20,30,50,0.65)",
+};
+
+// ── CATEGORIES ────────────────────────────────────────────────────────────────
+const CATEGORIES=[
+  {id:"faith",label:"Faith",icon:"✝️",sub:"Theology · Devotions · Church",gradient:["#4A1A8A","#7A3AC8"],shadow:"#7A3AC855",glowColor:"#7A3AC8",
+    items:[{id:"theology",label:"Theology",icon:"📖",color:"#A78BFA",desc:"Deep doctrinal study & reading"},{id:"devotions",label:"Personal Devotions",icon:"🙏",color:"#C4B5FD",desc:"Daily Bible study & prayer"},{id:"church",label:"Church Roles",icon:"⛪",color:"#8B5CF6",desc:"Service, ministry & community"}]},
+  {id:"business",label:"Business",icon:"💼",sub:"KyriosLearn · Treefriend · Menta · Supplya",gradient:["#004A8A","#007AC8"],shadow:"#007AC855",glowColor:"#007AC8",
+    items:[{id:"kyrioslearn",label:"KyriosLearn",icon:"🏫",color:"#38BDF8",desc:"Education business operations"},{id:"treefriend",label:"Treefriend",icon:"🌳",color:"#34D399",desc:"Plant & tree business"},{id:"menta",label:"Menta",icon:"🤝",color:"#60A5FA",desc:"Mentorship business"},{id:"supplya",label:"Supplya",icon:"📦",color:"#7DD3FC",desc:"School supply chain app"}]},
+  {id:"hobbies",label:"Hobbies",icon:"🎷",sub:"Music · Trees · Cooking · 3D · Crafts",gradient:["#1A4A8A","#00A8D4"],shadow:"#00A8D455",glowColor:"#00A8D4",
+    items:[{id:"music",label:"Music",icon:"🎷",color:"#00D4FF",desc:"Alto & soprano saxophone"},{id:"trees",label:"Trees",icon:"🌱",color:"#34D399",desc:"Plant care & gardening"},{id:"cooking",label:"Cooking",icon:"🍳",color:"#FBBF24",desc:"Meals, recipes & experiments"},{id:"printing",label:"3D Printing",icon:"🖨️",color:"#F87171",desc:"Printing & design projects"},{id:"crafts",label:"Crafts",icon:"✂️",color:"#C084FC",desc:"Creative handmade projects"},{id:"games",label:"Games",icon:"🎮",color:"#60A5FA",desc:"Gaming & leisure play"},{id:"movies",label:"Movies",icon:"🎬",color:"#FB923C",desc:"Films & entertainment"}]},
+  {id:"health",label:"Health",icon:"💪",sub:"Exercise · Wellness · Rest",gradient:["#004A3A","#008A6A"],shadow:"#008A6A55",glowColor:"#008A6A",
+    items:[{id:"exercise",label:"Exercise",icon:"🏃",color:"#34D399",desc:"Workouts & physical training"},{id:"rest",label:"Rest",icon:"😴",color:"#6EE7B7",desc:"Sleep, recovery & rest days"},{id:"nutrition",label:"Nutrition",icon:"🥗",color:"#A7F3D0",desc:"Diet, meals & hydration"}]},
+  {id:"leisure",label:"Leisure",icon:"🌍",sub:"Mzururo · Exploration · Relaxation",gradient:["#4A004A","#8A108A"],shadow:"#8A108A55",glowColor:"#8A108A",
+    items:[{id:"mzururo",label:"Mzururo",icon:"🚗",color:"#E879F9",desc:"Outings & local exploration"},{id:"travel",label:"Travel",icon:"✈️",color:"#C026D3",desc:"Trips & new destinations"},{id:"relaxation",label:"Relax",icon:"🛋️",color:"#A21CAF",desc:"Downtime & unwinding"}]},
+  {id:"finances",label:"Finances",icon:"💰",sub:"Shopping · Budget · Savings",gradient:["#1A2A5A","#2A4A8A"],shadow:"#2A4A8A55",glowColor:"#2A4A8A",
+    items:[{id:"shopping",label:"Shopping",icon:"🛒",color:"#60A5FA",desc:"Track purchases & spending"},{id:"budget",label:"Budget",icon:"📊",color:"#93C5FD",desc:"Monthly budgeting & review"},{id:"savings",label:"Savings",icon:"💎",color:"#BFDBFE",desc:"Goals, investments & growth"}]},
+];
+
+const ITEM_PROMPT=`You are a daily life coach for a Christian entrepreneur named KlN who runs KyriosLearn (education), Treefriend (plants), Menta (mentorship), Supplya (supply chain app), studies theology, serves in church, plays saxophone, does 3D printing, cooks, and does crafts.
+
+Today is {DAY}, {DATE}. Generate a focused daily plan for: "{ITEM_LABEL}" (part of {CAT_LABEL}).
+
+Return ONLY valid JSON, no markdown, no backticks:
+{"greeting":"motivational phrase max 10 words","focusStatement":"one sentence focus","tasks":[{"id":"t1","title":"Task","duration":"e.g. 20 min","importance":"Critical|High|Medium|Low","description":"2-3 practical sentences","tip":"short tip"}],"todayGoal":"one clear goal","scripture":"optional short ref"}
+
+Faith/Business = 3-5 tasks. Others = 2-3 tasks max 45min total.`;
+
+
+// ── BACKUP & RESTORE BUTTONS ──────────────────────────────────────────────
+function BackupButton({T}){
+  const [state,setState]=useState("idle"); // idle | loading | success | error
+  const run=async()=>{
+    setState("loading");
+    const ok=await backupToSheets();
+    setState(ok?"success":"error");
+    setTimeout(()=>setState("idle"),3000);
+  };
+  const styles={
+    idle:{bg:T.btnBg,color:T.text,label:"☁️ Backup to Sheets"},
+    loading:{bg:T.btnBg,color:T.accentDim,label:"Backing up..."},
+    success:{bg:"rgba(52,211,153,.2)",color:"#34D399",label:"✓ Backed up!"},
+    error:{bg:"rgba(248,113,113,.2)",color:"#F87171",label:"✗ Backup failed"},
+  }[state];
+  return <button onClick={run} disabled={state==="loading"} style={{flex:1,padding:"10px 12px",borderRadius:12,background:styles.bg,border:`1px solid ${T.glassBorder}`,color:styles.color,fontSize:12,fontWeight:600,cursor:"pointer",backdropFilter:"blur(12px)",transition:"all .2s"}}>
+    {styles.label}
+  </button>;
+}
+
+function RestoreButton({T}){
+  const [state,setState]=useState("idle");
+  const run=async()=>{
+    if(!window.confirm("Restore data from Google Sheets?\nThis will overwrite local data on this device."))return;
+    setState("loading");
+    const ok=await restoreFromSheets();
+    setState(ok?"success":"error");
+    if(ok){setTimeout(()=>{alert("✓ Data restored! The app will refresh.");window.location.reload();},800);}
+    else setTimeout(()=>setState("idle"),3000);
+  };
+  const styles={
+    idle:{bg:T.btnBg,color:T.accentDim,label:"⬇️ Restore"},
+    loading:{bg:T.btnBg,color:T.accentDim,label:"..."},
+    success:{bg:"rgba(52,211,153,.2)",color:"#34D399",label:"✓ Done"},
+    error:{bg:"rgba(248,113,113,.2)",color:"#F87171",label:"✗ Failed"},
+  }[state];
+  return <button onClick={run} disabled={state==="loading"} style={{padding:"10px 14px",borderRadius:12,background:styles.bg,border:`1px solid ${T.glassBorder}`,color:styles.color,fontSize:12,fontWeight:600,cursor:"pointer",backdropFilter:"blur(12px)",transition:"all .2s",whiteSpace:"nowrap"}}>
+    {styles.label}
+  </button>;
+}
+
+// ── STAR FIELD ────────────────────────────────────────────────────────────────
+function Stars(){
+  const s=Array.from({length:40},(_,i)=>({x:(i*73+17)%100,y:(i*47+31)%100,r:i%3===0?1.5:1,op:.1+(i%5)*.07,d:(i*.3)%3}));
+  return <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}} xmlns="http://www.w3.org/2000/svg">
+    {s.map((st,i)=><circle key={i} cx={st.x+"%"} cy={st.y+"%"} r={st.r} fill="#00D4FF" opacity={st.op} style={{animation:`twinkle ${2+st.d}s ease-in-out infinite`,animationDelay:st.d+"s"}}/>)}
+  </svg>;
+}
+
+function GridLines(){
+  return <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.04,pointerEvents:"none"}} xmlns="http://www.w3.org/2000/svg">
+    <defs><pattern id="g" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M 32 0 L 0 0 0 32" fill="none" stroke="#00D4FF" strokeWidth=".5"/></pattern></defs>
+    <rect width="100%" height="100%" fill="url(#g)"/>
+  </svg>;
+}
+
+function Bg({glow}){
+  return <div style={{position:"absolute",inset:0,overflow:"hidden",pointerEvents:"none",zIndex:0}}>
+    <Stars/><GridLines/>
+    {glow&&<div style={{position:"absolute",top:"15%",left:"55%",width:260,height:260,borderRadius:"50%",background:`radial-gradient(circle,${glow}14 0%,transparent 70%)`}}/>}
+    <div style={{position:"absolute",top:"5%",left:"-5%",width:200,height:200,borderRadius:"50%",background:"radial-gradient(circle,#4A1A8A16 0%,transparent 70%)"}}/>
+    <div style={{position:"absolute",bottom:"15%",right:"-5%",width:160,height:160,borderRadius:"50%",background:"radial-gradient(circle,#00A8D416 0%,transparent 70%)"}}/>
+  </div>;
+}
+
+// ── SIDEBAR ───────────────────────────────────────────────────────────────────
+function Sidebar({open,activeNav,onNav,onClose,T}){
+  return <>
+    {open&&<div onClick={onClose} style={{position:"fixed",inset:0,background:T.overlayBg,zIndex:199,backdropFilter:"blur(6px)"}}/>}
+    <div style={{position:"fixed",top:0,left:0,height:"100%",width:268,background:T.sidebarBg,backdropFilter:"blur(36px)",WebkitBackdropFilter:"blur(36px)",boxShadow:open?"4px 0 60px rgba(0,0,0,.8)":"none",transform:open?"translateX(0)":"translateX(-100%)",transition:"transform .3s cubic-bezier(.4,0,.2,1)",zIndex:200,display:"flex",flexDirection:"column",borderRight:`1px solid ${T.glassBorder}`}}>
+      <div style={{position:"absolute",inset:0,overflow:"hidden",pointerEvents:"none"}}>
+        <div style={{position:"absolute",top:-40,left:-40,width:160,height:160,borderRadius:"50%",background:"radial-gradient(circle,#4A1A8A20 0%,transparent 70%)"}}/>
+        <div style={{position:"absolute",bottom:60,right:-30,width:130,height:130,borderRadius:"50%",background:"radial-gradient(circle,#00D4FF0D 0%,transparent 70%)"}}/>
+      </div>
+      <div style={{padding:"52px 20px 18px",borderBottom:`1px solid ${T.glassBorder}`,position:"relative"}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
+          <div>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:3,color:T.accentDim,textTransform:"uppercase",marginBottom:4}}>Kingdom First</div>
+            <div style={{fontSize:19,fontWeight:800,color:T.text,letterSpacing:-.3}}>Daily Stewardship</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:T.textMuted,fontSize:18,padding:4,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{background:T.inputBg,backdropFilter:"blur(14px)",border:`1px solid ${T.glassBorder}`,borderRadius:14,padding:"10px 14px",display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:34,height:34,borderRadius:17,background:"linear-gradient(135deg,#4A1A8A,#00D4FF)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>✝️</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:T.text}}>KlN</div>
+            <div style={{fontSize:11,color:T.textMuted}}>Christian Entrepreneur</div>
+          </div>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"12px 10px"}}>
+        <NavBtn id="home" icon="⊞" label="Home" active={activeNav==="home"} onNav={onNav} ac={T.accent} T={T}/>
+        <div style={{fontSize:9,fontWeight:700,letterSpacing:1.8,color:T.textFaint,textTransform:"uppercase",margin:"16px 10px 6px"}}>Life Areas</div>
+        {CATEGORIES.map(c=><NavBtn key={c.id} id={c.id} icon={c.icon} label={c.label} active={activeNav===c.id} onNav={onNav} ac={c.glowColor} T={T}/>)}
+        <div style={{height:1,background:T.border,margin:"12px 6px"}}/>
+        <NavBtn id="calendar" icon="📅" label="Calendar" active={activeNav==="calendar"} onNav={onNav} ac={T.accent} T={T}/>
+        <div style={{height:1,background:T.border,margin:"12px 6px"}}/>
+        <NavBtn id="settings" icon="⚙️" label="Settings" active={activeNav==="settings"} onNav={onNav} ac={T.accent} T={T}/>
+        <NavBtn id="profile" icon="👤" label="Profile" active={activeNav==="profile"} onNav={onNav} ac={T.accent} T={T}/>
+      </div>
+      <div style={{padding:"12px 20px 24px",borderTop:`1px solid ${T.glassBorder}`}}>
+        <div style={{fontSize:10,color:T.textMuted,textAlign:"center",lineHeight:1.5}}>Midnight Blue · v4.0<br/><span style={{color:T.textFaint}}>Built on Kingdom First principles</span></div>
+      </div>
+    </div>
+  </>;
+}
+
+function NavBtn({id,icon,label,active,onNav,ac,T}){
+  return <button onClick={()=>onNav(id)} style={{display:"flex",alignItems:"center",gap:11,width:"100%",padding:"9px 10px",borderRadius:12,border:"none",background:active?ac+"22":"transparent",marginBottom:2,transition:"background .15s",cursor:"pointer"}}>
+    <div style={{width:32,height:32,borderRadius:10,background:active?ac+"30":T.surface2,backdropFilter:"blur(8px)",border:active?`1px solid ${ac}44`:`1px solid ${T.glassBorder}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>{icon}</div>
+    <span style={{fontSize:14,fontWeight:active?700:500,color:active?ac:T.textSub,flex:1,textAlign:"left"}}>{label}</span>
+    {active&&<div style={{width:5,height:5,borderRadius:3,background:ac,boxShadow:`0 0 6px ${ac}`}}/>}
+  </button>;
+}
+
+function HamIcon({color}){
+  return <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+    <rect width="18" height="2" rx="1" fill={color}/>
+    <rect y="6" width="12" height="2" rx="1" fill={color}/>
+    <rect y="12" width="18" height="2" rx="1" fill={color}/>
+  </svg>;
+}
+
+// ── HEADER ────────────────────────────────────────────────────────────────────
+function Header({left,center,right,T}){
+  return <div className="glass-header" style={{padding:"13px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50,background:T.headerBg,borderBottom:`1px solid ${T.glassBorder}`}}>
+    {left}
+    <div style={{textAlign:"center",flex:1,margin:"0 8px"}}>{center}</div>
+    {right}
+  </div>;
+}
+
+function IconBtn({onClick,children,T}){
+  return <button onClick={onClick} style={{width:36,height:36,borderRadius:10,background:T.btnBg,backdropFilter:"blur(14px)",border:`1px solid ${T.glassBorder}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>{children}</button>;
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function App(){
+  const now=new Date();
+  const dayName=DAYS[now.getDay()];
+  const dateStr=MONTHS[now.getMonth()]+" "+now.getDate()+", "+now.getFullYear();
+  const todayKey=now.getFullYear()+"-"+now.getMonth()+"-"+now.getDate();
+  const verse=VERSES[now.getDay()%VERSES.length];
+  const greet=now.getHours()<12?"Good Morning":now.getHours()<17?"Good Afternoon":"Good Evening";
+
+  const [themeMode,setThemeMode]=useState("auto");
+  const [sysDark,setSysDark]=useState(()=>window.matchMedia("(prefers-color-scheme:dark)").matches);
+  const isDark=themeMode==="auto"?sysDark:themeMode==="dark";
+  const T=isDark?DARK:LIGHT;
+
+  const [view,setView]=useState(null);
+  const [sidebar,setSidebar]=useState(false);
+  const [activeNav,setActiveNav]=useState("home");
+  const [itemData,setItemData]=useState({});
+  const [loading,setLoading]=useState({});
+  const [checked,setChecked]=useState({});
+  const [catItems,setCatItems]=useState(()=>{const o={};CATEGORIES.forEach(c=>{o[c.id]=[...c.items]});return o;});
+  const [addingTo,setAddingTo]=useState(null);
+  const [newLabel,setNewLabel]=useState("");
+  const [newIcon,setNewIcon]=useState("⭐");
+  const [anims,setAnims]=useState(false);
+  const mainRef=useRef(null);
+
+  const catId=view?.includes("/")?view.split("/")[0]:view;
+  const itemId=view?.includes("/")?view.split("/")[1]:null;
+  const cat=CATEGORIES.find(c=>c.id===catId);
+  const items=catId?(catItems[catId]||[]):[];
+  const item=itemId?items.find(x=>x.id===itemId):null;
+
+  useEffect(()=>{
+    const mq=window.matchMedia("(prefers-color-scheme:dark)");
+    const h=e=>setSysDark(e.matches);
+    mq.addEventListener("change",h);
+    return()=>mq.removeEventListener("change",h);
+  },[]);
+
+  useEffect(()=>{
+    (async()=>{
+      const c=await sg("checked-"+todayKey);
+      if(c?.value)setChecked(JSON.parse(c.value));
+      const ci=await sg("catItems-v1");
+      if(ci?.value)setCatItems(JSON.parse(ci.value));
+      const tm=await sg("themeMode");
+      if(tm?.value)setThemeMode(tm.value);
+    })();
+    setTimeout(()=>setAnims(true),80);
+  },[]);
+
+  useEffect(()=>{if(Object.keys(checked).length)ss("checked-"+todayKey,JSON.stringify(checked));},[checked]);
+  useEffect(()=>{ss("catItems-v1",JSON.stringify(catItems));},[catItems]);
+
+  const cycleTheme=()=>{const n=themeMode==="auto"?"light":themeMode==="light"?"dark":"auto";setThemeMode(n);ss("themeMode",n);};
+  const themeIcon=themeMode==="auto"?"🌗":themeMode==="dark"?"🌙":"☀️";
+
+  const fetchItem=useCallback(async(cId,iId)=>{
+    const key=cId+"/"+iId;
+    const ck="item-"+cId+"-"+iId+"-"+todayKey;
+    const cached=await sg(ck);
+    if(cached?.value){try{setItemData(p=>({...p,[key]:JSON.parse(cached.value)}));return;}catch{}}
+    setLoading(p=>({...p,[key]:true}));
+    const c=CATEGORIES.find(x=>x.id===cId);
+    const it=(catItems[cId]||[]).find(x=>x.id===iId);
+    if(!c||!it){setLoading(p=>({...p,[key]:false}));return;}
+    try{
+      const prompt=ITEM_PROMPT.replace("{DAY}",dayName).replace("{DATE}",dateStr).replace("{ITEM_LABEL}",it.label).replace("{CAT_LABEL}",c.label);
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const raw=data.content?.find(b=>b.type==="text")?.text||"{}";
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setItemData(p=>({...p,[key]:parsed}));ss(ck,JSON.stringify(parsed));
+    }catch{setItemData(p=>({...p,[key]:{error:true,tasks:[]}}));}
+    finally{setLoading(p=>({...p,[key]:false}));}
+  },[todayKey,dayName,dateStr,catItems]);
+
+  const openCat=id=>{setView(id);setSidebar(false);setActiveNav(id);mainRef.current?.scrollTo(0,0);};
+  const openItem=(cId,iId)=>{setView(cId+"/"+iId);if(!itemData[cId+"/"+iId])fetchItem(cId,iId);mainRef.current?.scrollTo(0,0);};
+  const goBack=()=>{if(itemId)setView(catId);else setView(null);};
+  const goHome=()=>{setView(null);setActiveNav("home");setSidebar(false);};
+  const navTo=id=>{setSidebar(false);if(id==="home")goHome();else if(CATEGORIES.find(c=>c.id===id))openCat(id);else{setActiveNav(id);setView(null);}};
+  const toggleTask=(key,tid)=>setChecked(p=>({...p,[key+"-"+tid]:!p[key+"-"+tid]}));
+  const iPct=(cId,iId)=>{const k=cId+"/"+iId;const d=itemData[k];if(!d?.tasks?.length)return 0;return Math.round(d.tasks.filter(t=>checked[k+"-"+t.id]).length/d.tasks.length*100);};
+  const cPct=cId=>{const its=catItems[cId]||[];if(!its.length)return 0;return Math.round(its.reduce((a,it)=>a+iPct(cId,it.id),0)/its.length);};
+  const overall=Math.round(CATEGORIES.reduce((a,c)=>a+cPct(c.id),0)/CATEGORIES.length);
+  const addItem=()=>{if(!newLabel.trim()||!addingTo)return;setCatItems(p=>({...p,[addingTo]:[...(p[addingTo]||[]),{id:"c-"+Date.now(),label:newLabel.trim(),icon:newIcon,color:T.accent,desc:"Custom item"}]}));setNewLabel("");setNewIcon("⭐");setAddingTo(null);};
+  const impC=i=>({"Critical":"#FF4D6A","High":"#00D4FF","Medium":"#7A3AC8","Low":"#008A6A"})[i]||T.textMuted;
+
+  const root={background:T.bg,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",position:"relative",overflow:"hidden",color:T.text};
+
+  const ThemeBtn=()=><IconBtn onClick={cycleTheme} T={T}><span style={{fontSize:16}}>{themeIcon}</span></IconBtn>;
+  const BackBtn=()=><IconBtn onClick={goBack} T={T}><svg width="10" height="16" viewBox="0 0 10 16" fill="none"><path d="M8 2L2 8L8 14" stroke={T.text} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg></IconBtn>;
+
+  // ── ADD MODAL ───────────────────────────────────────────────────────────────
+  const EMOJIS=["⭐","📝","🎯","💡","🔥","🌟","🚀","🎨","📌","🏆","🔑","💫","🌙","⚡","🎁","🛠️"];
+  const AddModal=()=><div style={{position:"fixed",inset:0,zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center",background:T.overlayBg,backdropFilter:"blur(8px)"}}>
+    <div style={{width:"100%",maxWidth:430,background:T.itemCardBg,backdropFilter:"blur(32px)",borderRadius:"22px 22px 0 0",padding:"22px 20px 40px",border:`1px solid ${T.inputBorder}`}}>
+      <div style={{width:36,height:4,borderRadius:2,background:T.textFaint,margin:"0 auto 18px"}}/>
+      <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:4}}>Add new item</div>
+      <div style={{fontSize:12,color:T.textMuted,marginBottom:18}}>to {CATEGORIES.find(c=>c.id===addingTo)?.label}</div>
+      <div style={{fontSize:11,fontWeight:700,color:T.textMuted,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Pick an icon</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:18}}>
+        {EMOJIS.map(e=><button key={e} onClick={()=>setNewIcon(e)} style={{width:38,height:38,borderRadius:10,border:`1.5px solid ${newIcon===e?T.accent:T.border}`,background:newIcon===e?T.accentFaint:T.inputBg,cursor:"pointer",fontSize:18}}>{e}</button>)}
+      </div>
+      <div style={{fontSize:11,fontWeight:700,color:T.textMuted,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Name</div>
+      <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()} placeholder="e.g. Morning devotion..." style={{width:"100%",padding:"12px 14px",borderRadius:12,border:`1px solid ${T.inputBorder}`,background:T.inputBg,color:T.text,fontSize:14,marginBottom:16,display:"block"}}/>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={()=>{setAddingTo(null);setNewLabel("");}} style={{flex:1,padding:"12px",borderRadius:12,border:`1px solid ${T.glassBorder}`,background:T.inputBg,color:T.textSub,fontSize:14,fontWeight:600}}>Cancel</button>
+        <button onClick={addItem} style={{flex:2,padding:"12px",borderRadius:12,border:"none",background:T.accent,color:"#fff",fontSize:14,fontWeight:700}}>Add Item</button>
+      </div>
+    </div>
+  </div>;
+
+  // ── ITEM DETAIL VIEW ────────────────────────────────────────────────────────
+  if(view&&itemId&&cat&&item){
+    // Special devotions page
+    if(itemId==="devotions"){
+      return <DevotionsPage T={T} isDark={isDark} goBack={()=>setView(catId)} cycleTheme={cycleTheme} themeIcon={themeIcon}/>;
+    }
+    // Static populated pages
+    if(STATIC_PAGES[itemId]){
+      const PageComp = STATIC_PAGES[itemId];
+      return <PageComp T={T} isDark={isDark} goBack={()=>setView(catId)} cycleTheme={cycleTheme} themeIcon={themeIcon}/>;
+    }
+    const key=catId+"/"+itemId;
+    const data=itemData[key];
+    const isLoad=loading[key];
+    const tasks=data?.tasks||[];
+    const done=tasks.filter(t=>checked[key+"-"+t.id]).length;
+    const pct=tasks.length?Math.round(done/tasks.length*100):0;
+    const [g1,g2]=cat.gradient;
+    return <div style={root}>
+      <Bg glow={item.color}/>
+      <Sidebar open={sidebar} activeNav={activeNav} onNav={navTo} onClose={()=>setSidebar(false)} T={T}/>
+      <Header T={T}
+        left={<BackBtn/>}
+        center={<><div style={{fontSize:15,fontWeight:700,color:T.text}}>{item.icon} {item.label}</div><div style={{fontSize:11,color:T.textMuted}}>{cat.label}</div></>}
+        right={<ThemeBtn/>}
+      />
+      <div ref={mainRef} style={{flex:1,overflowY:"auto",paddingBottom:40,position:"relative",zIndex:1}}>
+        <div style={{background:`linear-gradient(145deg,${g1},${g2})`,padding:"26px 20px 22px",position:"relative",overflow:"hidden",boxShadow:`0 8px 40px ${cat.shadow}`}}>
+          <div style={{position:"absolute",top:-28,right:-28,width:120,height:120,borderRadius:"50%",background:"rgba(255,255,255,.08)"}}/>
+          <div style={{fontSize:44,marginBottom:10,filter:"drop-shadow(0 4px 8px rgba(0,0,0,.4))"}}>{item.icon}</div>
+          <div style={{fontSize:26,fontWeight:800,color:"#fff",marginBottom:3}}>{item.label}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.65)",marginBottom:18}}>{item.desc}</div>
+          <div style={{background:"rgba(255,255,255,.18)",borderRadius:99,height:9,overflow:"hidden",marginBottom:7}}>
+            <div style={{width:pct+"%",height:"100%",background:"rgba(255,255,255,.9)",borderRadius:99,transition:"width .6s"}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontSize:12,color:"rgba(255,255,255,.6)"}}>{done} of {tasks.length} tasks</span>
+            <span style={{fontSize:13,fontWeight:700,color:"#fff"}}>{pct}%</span>
+          </div>
+        </div>
+        <div style={{padding:"16px 16px 40px"}}>
+          {isLoad&&<div style={{textAlign:"center",padding:"60px 0",background:T.greetingBg,backdropFilter:"blur(12px)",borderRadius:18,border:`1px solid ${T.glassBorder}`,marginBottom:12}}>
+            <div style={{width:44,height:44,border:`3px solid ${T.border}`,borderTop:`3px solid ${T.accent}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto"}}/>
+            <div style={{color:T.textMuted,fontSize:13,marginTop:14}}>Generating {item.label} plan…</div>
+          </div>}
+          {data?.error&&<div style={{background:"rgba(30,8,8,0.7)",borderRadius:16,padding:20,border:"1px solid rgba(255,77,106,0.3)"}}>
+            <div style={{color:"#FF4D6A",fontSize:13,marginBottom:12}}>Couldn't load. Check your internet connection.</div>
+            <button onClick={()=>{setItemData(p=>{const n={...p};delete n[key];return n;});fetchItem(catId,itemId);}} style={{background:T.accent,color:isDark?"#060B14":"#fff",border:"none",borderRadius:12,padding:"10px 20px",fontSize:14,fontWeight:700}}>Retry</button>
+          </div>}
+          {data&&!data.error&&!isLoad&&<>
+            <div style={{background:T.greetingBg,backdropFilter:"blur(20px)",borderRadius:18,padding:"16px 18px",marginBottom:12,border:`1px solid ${T.glassBorder}`,borderLeft:`3px solid ${item.color}`}}>
+              <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:6}}>{data.greeting}</div>
+              <div style={{fontSize:13,color:T.textSub,lineHeight:1.65}}>{data.focusStatement}</div>
+              {data.scripture&&<div style={{fontSize:11,color:T.accent,marginTop:10,fontWeight:600}}>📖 {data.scripture}</div>}
+            </div>
+            <div style={{background:T.accentFaint,backdropFilter:"blur(16px)",borderRadius:16,padding:"12px 16px",marginBottom:18,border:`1px solid ${T.glassBorderStrong}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:T.accent,letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>🎯 Today's Goal</div>
+              <div style={{fontSize:13,color:T.text,lineHeight:1.65}}>{data.todayGoal}</div>
+            </div>
+            <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Tasks for Today</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {tasks.map((task,i)=>{
+                const d=checked[key+"-"+task.id];
+                const ic=impC(task.importance);
+                return <div key={task.id} className="task-card" style={{background:d?T.taskDoneBg:T.taskBg,backdropFilter:"blur(18px)",borderRadius:18,overflow:"hidden",border:`1px solid ${d?T.glassBorder:T.glassBorderStrong}`,opacity:d?.55:1,transition:"all .25s",animationDelay:i*70+"ms"}}>
+                  <div onClick={()=>toggleTask(key,task.id)} style={{padding:"14px 16px",cursor:"pointer",display:"flex",gap:12,alignItems:"flex-start"}}>
+                    <div style={{width:24,height:24,borderRadius:12,border:`2px solid ${d?ic:T.glassBorderStrong}`,background:d?ic:T.accentFaint,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1,transition:"all .2s",boxShadow:d?`0 0 10px ${ic}55`:"none"}}>
+                      {d&&<span style={{color:"#fff",fontSize:12,fontWeight:800}}>✓</span>}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:5}}>
+                        <span style={{fontSize:14,fontWeight:600,color:d?T.textMuted:T.text,textDecoration:d?"line-through":"none"}}>{task.title}</span>
+                        <span style={{fontSize:10,fontWeight:700,background:ic+"18",color:ic,padding:"2px 9px",borderRadius:99,flexShrink:0,border:`1px solid ${ic}33`}}>{task.importance}</span>
+                      </div>
+                      <div style={{fontSize:12,color:T.accent,fontWeight:600,marginBottom:5}}>⏱ {task.duration}</div>
+                      <div style={{fontSize:13,color:T.textSub,lineHeight:1.7}}>{task.description}</div>
+                    </div>
+                  </div>
+                  {task.tip&&<div style={{background:T.accentFaint,borderTop:`1px solid ${T.glassBorder}`,padding:"8px 16px 10px 52px"}}>
+                    <span style={{fontSize:12,color:T.accentDim}}>💡 {task.tip}</span>
+                  </div>}
+                </div>;
+              })}
+            </div>
+            {pct===100&&<div style={{textAlign:"center",padding:"36px 20px",background:T.accentFaint,borderRadius:20,marginTop:20,border:`1px solid ${T.glassBorderStrong}`}}>
+              <div style={{fontSize:50,marginBottom:10}}>🏆</div>
+              <div style={{fontSize:18,fontWeight:800,color:T.accent,marginBottom:6}}>All done!</div>
+              <div style={{fontSize:13,color:T.textSub,fontStyle:"italic"}}>"Well done, good and faithful servant."</div>
+            </div>}
+          </>}
+        </div>
+      </div>
+    </div>;
+  }
+
+  // ── CATEGORY VIEW ───────────────────────────────────────────────────────────
+  if(view&&cat&&!itemId){
+    const [g1,g2]=cat.gradient;
+    return <div style={root}>
+      <Bg glow={cat.glowColor}/>
+      <Sidebar open={sidebar} activeNav={activeNav} onNav={navTo} onClose={()=>setSidebar(false)} T={T}/>
+      {addingTo&&<AddModal/>}
+      <Header T={T}
+        left={<BackBtn/>}
+        center={<><div style={{fontSize:15,fontWeight:700,color:T.text}}>{cat.icon} {cat.label}</div><div style={{fontSize:11,color:T.textMuted}}>{items.length} items</div></>}
+        right={<ThemeBtn/>}
+      />
+      <div ref={mainRef} style={{flex:1,overflowY:"auto",position:"relative",zIndex:1}}>
+        <div style={{background:`linear-gradient(145deg,${g1},${g2})`,padding:"22px 20px 18px",position:"relative",overflow:"hidden",boxShadow:`0 6px 32px ${cat.shadow}`}}>
+          <div style={{position:"absolute",top:-22,right:-22,width:100,height:100,borderRadius:"50%",background:"rgba(255,255,255,.09)"}}/>
+          <div style={{fontSize:38,marginBottom:8}}>{cat.icon}</div>
+          <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:2}}>{cat.label}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.65)",marginBottom:14}}>{cat.sub}</div>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{flex:1,background:"rgba(255,255,255,.2)",borderRadius:99,height:7,overflow:"hidden"}}>
+              <div style={{width:cPct(catId)+"%",height:"100%",background:"rgba(255,255,255,.9)",borderRadius:99,transition:"width .5s"}}/>
+            </div>
+            <span style={{fontSize:13,fontWeight:800,color:"#fff",minWidth:32}}>{cPct(catId)}%</span>
+          </div>
+        </div>
+        <div style={{padding:"16px 16px 100px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:1.8,textTransform:"uppercase",marginBottom:14}}>Items</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {items.map((it,i)=>{
+              const p=iPct(catId,it.id);
+              return <div key={it.id} onClick={()=>openItem(catId,it.id)} className="item-card"
+                style={{background:T.itemCardBg,backdropFilter:"blur(22px)",borderRadius:20,padding:"16px 18px",border:`1px solid ${p>0?T.glassBorderStrong:T.glassBorder}`,cursor:"pointer",display:"flex",alignItems:"center",gap:14,animationDelay:i*60+"ms"}}>
+                <div style={{width:48,height:48,borderRadius:16,background:it.color+"22",border:`1.5px solid ${it.color}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+                  {it.icon}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:2}}>{it.label}</div>
+                  <div style={{fontSize:11,color:T.textMuted,marginBottom:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.desc}</div>
+                  <div style={{background:"rgba(255,255,255,.07)",borderRadius:99,height:4,overflow:"hidden"}}>
+                    <div style={{width:p+"%",height:"100%",background:`linear-gradient(90deg,${it.color}99,${it.color})`,borderRadius:99,transition:"width .4s"}}/>
+                  </div>
+                </div>
+                <span style={{fontSize:13,fontWeight:800,color:p>0?it.color:T.textFaint,flexShrink:0}}>{p===100?"✅":p>0?p+"%":"→"}</span>
+              </div>;
+            })}
+          </div>
+        </div>
+      </div>
+      <button onClick={()=>setAddingTo(catId)} className="fab" style={{position:"absolute",bottom:28,right:20,zIndex:60,width:56,height:56,borderRadius:28,background:`linear-gradient(135deg,${g1},${g2})`,border:"1.5px solid rgba(255,255,255,.2)",boxShadow:`0 6px 28px ${cat.shadow}`,cursor:"pointer",fontSize:28,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>+</button>
+    </div>;
+  }
+
+  // ── HOME VIEW ───────────────────────────────────────────────────────────────
+  return <div style={root}>
+    <Bg/>
+    <Sidebar open={sidebar} activeNav={activeNav} onNav={navTo} onClose={()=>setSidebar(false)} T={T}/>
+    <Header T={T}
+      left={<IconBtn onClick={()=>setSidebar(true)} T={T}><HamIcon color={T.text}/></IconBtn>}
+      center={<><div style={{fontSize:10,fontWeight:700,letterSpacing:2.5,color:T.accentDim,textTransform:"uppercase"}}>Kingdom First</div><div style={{fontSize:15,fontWeight:800,color:T.text,letterSpacing:-.2}}>Daily Stewardship</div></>}
+      right={<ThemeBtn/>}
+    />
+    <div ref={mainRef} style={{flex:1,overflowY:"auto",paddingBottom:32,position:"relative",zIndex:1}}>
+      {/* Verse */}
+      <div style={{margin:"16px 16px 0",background:`linear-gradient(135deg,${T.verseGrad[0]},${T.verseGrad[1]})`,borderRadius:22,padding:"20px 18px 18px",position:"relative",overflow:"hidden",boxShadow:"0 8px 40px #4A1A8A44"}}>
+        <div style={{position:"absolute",top:-22,right:-22,width:110,height:110,borderRadius:"50%",background:"rgba(255,255,255,.08)"}}/>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:2.5,textTransform:"uppercase",color:"rgba(255,255,255,.6)",marginBottom:9}}>Word for Today · {dayName}</div>
+        <div style={{fontSize:15,fontStyle:"italic",lineHeight:1.7,color:"#fff",marginBottom:10}}>"{verse.text}"</div>
+        <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,.8)"}}>— {verse.ref}</div>
+      </div>
+      {/* Greeting + overall */}
+      <div style={{margin:"12px 16px 0",background:T.greetingBg,backdropFilter:"blur(24px)",borderRadius:20,padding:"16px 18px",border:`1px solid ${T.greetingBorder}`,boxShadow:T.cardShadow,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,right:0,width:110,height:110,borderRadius:"50%",background:"radial-gradient(circle,"+T.accent+"08 0%,transparent 70%)",transform:"translate(30%,-30%)"}}/>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div>
+            <div style={{fontSize:21,fontWeight:800,color:T.text,letterSpacing:-.3}}>{greet} 👋</div>
+            <div style={{fontSize:12,color:T.textMuted,marginTop:3}}>Tap a category to start</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:32,fontWeight:800,color:T.accent,lineHeight:1}}>{overall}<span style={{fontSize:13,color:T.textMuted}}>%</span></div>
+            <div style={{fontSize:10,color:T.textMuted}}>Today</div>
+          </div>
+        </div>
+        <div style={{background:"rgba(255,255,255,.06)",borderRadius:99,height:6,overflow:"hidden",border:`1px solid ${T.glassBorder}`}}>
+          <div style={{width:overall+"%",height:"100%",background:`linear-gradient(90deg,#4A1A8A,${T.accent})`,borderRadius:99,transition:"width .6s"}}/>
+        </div>
+      </div>
+      {/* 6-card grid */}
+      <div style={{padding:"16px 16px 32px"}}>
+        <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:1.8,textTransform:"uppercase",marginBottom:14}}>Life Areas</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          {CATEGORIES.map((c,i)=>{
+            const p=cPct(c.id);
+            const [g1,g2]=c.gradient;
+            return <div key={c.id} onClick={()=>openCat(c.id)} className="home-card"
+              style={{background:`linear-gradient(145deg,${g1},${g2})`,borderRadius:22,padding:"18px 16px 14px",cursor:"pointer",position:"relative",overflow:"hidden",boxShadow:`0 8px 32px ${c.shadow},inset 0 1px 0 rgba(255,255,255,.1)`,minHeight:158,display:"flex",flexDirection:"column",justifyContent:"space-between",opacity:anims?1:0,transform:anims?"translateY(0) scale(1)":"translateY(24px) scale(.96)",transition:`opacity .5s ease ${i*90}ms,transform .5s cubic-bezier(.34,1.4,.64,1) ${i*90}ms`,border:"1px solid rgba(255,255,255,.08)"}}>
+              <div style={{position:"absolute",top:-18,right:-18,width:80,height:80,borderRadius:"50%",background:"rgba(255,255,255,.13)",pointerEvents:"none"}}/>
+              <div style={{position:"absolute",bottom:-24,right:12,width:62,height:62,borderRadius:"50%",background:"rgba(255,255,255,.07)",pointerEvents:"none"}}/>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:"linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent)",pointerEvents:"none"}}/>
+              <div>
+                <div style={{fontSize:30,marginBottom:9}}>{c.icon}</div>
+                <div style={{fontSize:14,fontWeight:800,color:"#fff",marginBottom:2}}>{c.label}</div>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.6)"}}>{(catItems[c.id]||[]).length} items</div>
+              </div>
+              <div style={{marginTop:12}}>
+                <div style={{background:"rgba(255,255,255,.2)",borderRadius:99,height:5,overflow:"hidden",marginBottom:7}}>
+                  <div style={{width:p+"%",height:"100%",background:"rgba(255,255,255,.9)",borderRadius:99,transition:"width .5s"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:10,color:"rgba(255,255,255,.55)"}}>{p>0?p+"% complete":"Tap to explore"}</span>
+                  <span style={{fontSize:12,fontWeight:800,color:"#fff"}}>{p===100?"✅":p>0?p+"%":"→"}</span>
+                </div>
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATIC CONTENT DATABASE — All sections except Theology (AI-generated)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Helper: persist per-item checked state ──
+function useChecklist(storageKey) {
+  const [done, setDone] = useState({});
+  useEffect(() => { (async()=>{ const r=await sg(storageKey); if(r?.value) setDone(JSON.parse(r.value)); })(); }, []);
+  const toggle = (id) => { const n={...done,[id]:!done[id]}; setDone(n); ss(storageKey,JSON.stringify(n)); };
+  const count = Object.values(done).filter(Boolean).length;
+  return [done, toggle, count];
+}
+
+// ── Shared section components ──
+function SectionHero({icon,title,subtitle,color,gradStart,gradEnd,pct,done,total}) {
+  return <div style={{background:`linear-gradient(145deg,${gradStart},${gradEnd})`,padding:"22px 20px 18px",position:"relative",overflow:"hidden",boxShadow:`0 6px 32px ${gradEnd}55`}}>
+    <div style={{position:"absolute",top:-20,right:-20,width:100,height:100,borderRadius:"50%",background:"rgba(255,255,255,.1)"}}/>
+    <div style={{fontSize:38,marginBottom:8}}>{icon}</div>
+    <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:2}}>{title}</div>
+    <div style={{fontSize:12,color:"rgba(255,255,255,.65)",marginBottom:14}}>{subtitle}</div>
+    <div style={{background:"rgba(255,255,255,.2)",borderRadius:99,height:7,overflow:"hidden",marginBottom:6}}>
+      <div style={{width:pct+"%",height:"100%",background:"rgba(255,255,255,.9)",borderRadius:99,transition:"width .5s"}}/>
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between"}}>
+      <span style={{fontSize:12,color:"rgba(255,255,255,.6)"}}>{done} of {total} tasks done</span>
+      <span style={{fontSize:12,fontWeight:700,color:"#fff"}}>{pct}%</span>
+    </div>
+  </div>;
+}
+
+function TaskCard({id, icon, title, desc, note, color, done, onToggle, links}) {
+  return <div style={{background:done?"rgba(8,14,26,.50)":"rgba(13,21,32,.72)",backdropFilter:"blur(18px)",borderRadius:18,overflow:"hidden",border:`1px solid ${done?"rgba(0,212,255,.06)":"rgba(0,212,255,.14)"}`,opacity:done?.6:1,transition:"all .25s",marginBottom:10}}>
+    <div onClick={onToggle} style={{padding:"14px 16px",cursor:"pointer",display:"flex",gap:12,alignItems:"flex-start"}}>
+      <div style={{width:28,height:28,borderRadius:14,border:`2px solid ${done?color:"rgba(0,212,255,.2)"}`,background:done?color:"rgba(0,212,255,.06)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1,transition:"all .2s",boxShadow:done?`0 0 10px ${color}55`:"none"}}>
+        {done?<span style={{color:"#fff",fontSize:13,fontWeight:800}}>✓</span>:<span style={{fontSize:14}}>{icon}</span>}
+      </div>
+      <div style={{flex:1}}>
+        <div style={{fontSize:14,fontWeight:600,color:done?"#3A5A7A":"#E8F4FF",textDecoration:done?"line-through":"none",marginBottom:4}}>{title}</div>
+        <div style={{fontSize:12,color:"#7A9CC0",lineHeight:1.6}}>{desc}</div>
+        {links&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>{links.map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{fontSize:11,color:color,background:color+"18",padding:"3px 9px",borderRadius:99,border:`1px solid ${color}33`,textDecoration:"none"}}>{l.label}</a>)}</div>}
+      </div>
+    </div>
+    {note&&<div style={{background:"rgba(0,212,255,.05)",borderTop:"1px solid rgba(0,212,255,.08)",padding:"7px 16px 9px 56px"}}><span style={{fontSize:11,color:"#00D4FF88"}}>💡 {note}</span></div>}
+  </div>;
+}
+
+function InfoCard({children, color}) {
+  return <div style={{background:color+"10",backdropFilter:"blur(16px)",borderRadius:16,padding:"13px 16px",marginBottom:14,border:`1px solid ${color}28`}}>{children}</div>;
+}
+
+// ── STANDARD PAGE WRAPPER ──────────────────────────────────────────────────
+function StandardPage({T,isDark,goBack,cycleTheme,themeIcon,gradStart,gradEnd,icon,title,subtitle,glowColor,children}) {
+  return <div style={{background:T.bg,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",position:"relative",overflow:"hidden",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
+    <div style={{position:"absolute",inset:0,overflow:"hidden",pointerEvents:"none",zIndex:0}}>
+      <Stars/><GridLines/>
+      <div style={{position:"absolute",top:"10%",left:"50%",width:280,height:280,borderRadius:"50%",background:`radial-gradient(circle,${glowColor}14 0%,transparent 70%)`}}/>
+    </div>
+    <div className="glass-header" style={{padding:"13px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50,background:T.headerBg,borderBottom:"1px solid "+T.glassBorder}}>
+      <button onClick={goBack} style={{width:36,height:36,borderRadius:10,background:T.btnBg,backdropFilter:"blur(14px)",border:"1px solid "+T.glassBorder,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+        <svg width="10" height="16" viewBox="0 0 10 16" fill="none"><path d="M8 2L2 8L8 14" stroke={T.text} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </button>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:2,color:glowColor,textTransform:"uppercase"}}>{title}</div>
+        <div style={{fontSize:14,fontWeight:800,color:T.text}}>{subtitle}</div>
+      </div>
+      <button onClick={cycleTheme} style={{width:36,height:36,borderRadius:18,background:T.btnBg,backdropFilter:"blur(12px)",border:"1px solid "+T.glassBorder,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,cursor:"pointer"}}>{themeIcon}</button>
+    </div>
+    <div style={{flex:1,overflowY:"auto",paddingBottom:40,position:"relative",zIndex:1}}>{children}</div>
+  </div>;
+}
+
+function SectionLabel({label,color}) {
+  return <div style={{fontSize:10,fontWeight:700,color:color||"#3A5A7A",letterSpacing:1.5,textTransform:"uppercase",margin:"18px 0 10px"}}>{label}</div>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// CHURCH ROLES PAGE
+// ════════════════════════════════════════════════════════════════
+function ChurchPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("church-"+todayKey);
+  const color = "#8B5CF6";
+  const tasks = [
+    {id:"c1",icon:"🙏",title:"Morning Prayer for the Congregation",desc:"Spend 10 min praying specifically for church members, leadership, and the week's services.",note:"Use a prayer list or journal to track who you've prayed for."},
+    {id:"c2",icon:"📖",title:"Prepare Sunday Message Notes",desc:"If serving as a teacher or cell leader, review your passage, outline key points, and prepare illustrations.",note:"Aim to finish preparation by Friday evening."},
+    {id:"c3",icon:"📞",title:"Check In with a Church Member",desc:"Send a text or call one person from your church community. Encouragement, accountability, or just checking in.",note:"Keep a rotating list so you reach everyone monthly."},
+    {id:"c4",icon:"🎵",title:"Worship Practice",desc:"If you serve in music ministry, run through Sunday's worship set. Practice transitions and key changes.",note:"Record yourself once a week to identify areas to improve."},
+    {id:"c5",icon:"👥",title:"Cell/Small Group Preparation",desc:"Review the week's discussion questions, prepare testimony or ice-breaker, confirm venue and attendance.",note:"WhatsApp reminder to group 24hrs before meeting."},
+    {id:"c6",icon:"🛠️",title:"Serve in Your Ministry Area",desc:"Complete any scheduled tasks in your service area — ushering, sound, children's ministry, hospitality.",note:"Arrive 30 min early to set up properly."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  const props = {T,isDark,goBack,cycleTheme,themeIcon,gradStart:"#4A1A8A",gradEnd:"#8B5CF6",icon:"⛪",title:"Church Roles",subtitle:"Ministry & Service",glowColor:color};
+  return <StandardPage {...props}>
+    <SectionHero icon="⛪" title="Church Roles" subtitle="Ministry & Service" color={color} gradStart="#4A1A8A" gradEnd="#8B5CF6" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:13,fontWeight:700,color:color,marginBottom:4}}>📅 This Week</div>
+        <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.7}}>Sunday Service · Cell Group · Prayer Meeting · Ministry Prep</div>
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#7A3AC8">
+        <div style={{fontSize:12,fontWeight:700,color:"#A78BFA",marginBottom:6}}>🔗 Helpful Resources</div>
+        {[{label:"YouVersion Bible",url:"https://www.bible.com"},{label:"Enduring Word",url:"https://enduringword.com"},{label:"Desiring God",url:"https://www.desiringgod.org"},{label:"The Gospel Coalition",url:"https://www.thegospelcoalition.org"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:"#A78BFA",padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// KYRIOSLEARN PAGE
+// ════════════════════════════════════════════════════════════════
+function KyriosLearnPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dayName = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][today.getDay()];
+  const [done,toggle,count] = useChecklist("kyrios-"+todayKey);
+  const color = "#38BDF8";
+  const weekly = {
+    Monday:["Review weekly KPIs & set priorities","Sales pipeline review with salesperson","Teacher lesson plan check-in"],
+    Tuesday:["Accounting: record all transactions","Send invoices/receipts","Review student progress reports"],
+    Wednesday:["Curriculum planning & competitions research","Partnership outreach (2 new contacts)","Team WhatsApp update"],
+    Thursday:["Sales calls & follow-ups","Student enrollment follow-ups","Marketing content planning"],
+    Friday:["Weekly financial summary","Payroll & staff payments","Plan next week's schedule"],
+    Saturday:["Strategic review — what worked?","Business development tasks","Prepare Monday team agenda"],
+    Sunday:["Rest — review vision & mission only","Optional: light reading on education trends","Pray over the business"],
+  };
+  const tasks = (weekly[dayName]||weekly["Monday"]).map((t,i)=>({id:"k"+i,icon:"💼",title:t,desc:""}));
+  const dailyCore = [
+    {id:"kd1",icon:"📧",title:"Check & respond to all messages",desc:"Email, WhatsApp, and any pending parent/student queries. Target: inbox zero by 10am.",note:"Batch responses — don't check every 10 minutes."},
+    {id:"kd2",icon:"👩‍🏫",title:"Teacher coordination",desc:"Quick check: are lessons prepared? Any student issues? Resources needed?",note:"Keep a shared Notion or Google Doc for daily teacher updates."},
+    {id:"kd3",icon:"📊",title:"Review business metrics",desc:"Enrollments, revenue vs target, outstanding payments, and any new leads from salesperson.",note:"Use a simple dashboard — even a Google Sheet works."},
+  ];
+  const allTasks = [...dailyCore, ...tasks.map((t,i)=>({...t,id:"kw"+i,desc:"Weekly task for "+dayName}))];
+  const pct = allTasks.length ? Math.round(count/allTasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#004A8A" gradEnd="#007AC8" icon="🏫" title="KyriosLearn" subtitle="Education Business" glowColor={color}>
+    <SectionHero icon="🏫" title="KyriosLearn" subtitle="Education Business Operations" color={color} gradStart="#004A8A" gradEnd="#007AC8" pct={pct} done={count} total={allTasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:13,fontWeight:700,color:color,marginBottom:6}}>🏢 Business Overview</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {[{k:"Staff",v:"3 (you + 2 teachers + salesperson)"},{k:"Model",v:"Education services"},{k:"Today",v:dayName},{k:"Focus",v:"Operations & growth"}].map(x=><div key={x.k}><div style={{fontSize:9,color:"#3A5A7A",textTransform:"uppercase",letterSpacing:.8}}>{x.k}</div><div style={{fontSize:11,color:"#E8F4FF",fontWeight:600}}>{x.v}</div></div>)}
+        </div>
+      </InfoCard>
+      <SectionLabel label="📋 Daily Core Tasks" color={color}/>
+      {dailyCore.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label={"📅 "+dayName+" Specific"} color={color}/>
+      {tasks.map((t,i)=><TaskCard key={"kw"+i} {...t} id={"kw"+i} color={color} done={!!done["kw"+i]} onToggle={()=>toggle("kw"+i)}/>)}
+      <InfoCard color="#007AC8">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Business Tools</div>
+        {[{label:"Wave Accounting",url:"https://www.waveapps.com"},{label:"Notion (team notes)",url:"https://notion.so"},{label:"Google Workspace",url:"https://workspace.google.com"},{label:"Calendly (scheduling)",url:"https://calendly.com"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// TREEFRIEND PAGE
+// ════════════════════════════════════════════════════════════════
+function TreefriendPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay(); // 0=Sun
+  const [done,toggle,count] = useChecklist("tree-"+todayKey);
+  const color = "#34D399";
+  // Water on Mon, Thu, Sun; other tasks vary
+  const isWaterDay = [0,1,4].includes(dow);
+  const tasks = [
+    {id:"tf1",icon:"💧",title:isWaterDay?"Water all plants":"Check soil moisture",desc:isWaterDay?"Water day! Check each plant individually. Bottom water succulents, top water tropicals.":"Feel soil 2 inches deep. Water only if dry. Note any plants needing attention.",note:"Use the finger test — if soil sticks, don't water yet.",show:true},
+    {id:"tf2",icon:"🌿",title:"Inspect for pests & disease",desc:"Check undersides of leaves for spider mites, aphids, or yellowing. Treat any issues immediately.",note:"Neem oil spray (1tsp/500ml water) handles most pests organically.",show:true},
+    {id:"tf3",icon:"✂️",title:"Prune dead leaves & stems",desc:"Remove yellowing, dead, or damaged foliage. This redirects energy to healthy growth.",note:"Clean your pruning shears with alcohol between plants to prevent spreading disease.",show:dow===1||dow===5},
+    {id:"tf4",icon:"🪴",title:"Repot or fertilise if needed",desc:"Check if any plants are root-bound (roots coming out of drainage holes). Feed monthly with balanced liquid fertiliser.",note:"Spring and summer = feeding season. Reduce in winter.",show:dow===6||dow===0},
+    {id:"tf5",icon:"📸",title:"Document growth progress",desc:"Take weekly photos of each plant to track growth, health changes, and seasonal patterns.",note:"Organise in a phone album labelled by plant name and date.",show:dow===0||dow===3},
+    {id:"tf6",icon:"📦",title:"Treefriend business tasks",desc:"Update plant inventory, respond to any customer enquiries, photograph stock for social media.",note:"Instagram and TikTok are great for plant business marketing.",show:true},
+  ].filter(t=>t.show);
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#004A3A" gradEnd="#34D399" icon="🌳" title="Treefriend" subtitle="Plant & Tree Business" glowColor={color}>
+    <SectionHero icon="🌳" title="Treefriend" subtitle="Plant & Tree Care Business" color={color} gradStart="#004A3A" gradEnd="#34D399" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:12,color:color,fontWeight:700,marginBottom:4}}>🌤️ Today's Care Schedule</div>
+        <div style={{fontSize:11,color:"#9CA3AF"}}>
+          {isWaterDay?"💧 Watering Day":"🌿 Maintenance Day"} · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dow]}<br/>
+          Water days: Monday, Thursday, Sunday
+        </div>
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#22C55E">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Plant Resources</div>
+        {[{label:"Greg App (plant care reminders)",url:"https://greg.app"},{label:"Plantnet (plant ID)",url:"https://plantnet.org"},{label:"Houseplant411",url:"https://www.houseplant411.com"},{label:"r/houseplants",url:"https://reddit.com/r/houseplants"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// MENTA (MENTORSHIP BUSINESS) PAGE
+// ════════════════════════════════════════════════════════════════
+function MentaPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("menta-"+todayKey);
+  const color = "#60A5FA";
+  const tasks = [
+    {id:"m1",icon:"🗂️",title:"Review active mentees",desc:"Check in on 1–2 mentees today. Review their goals, progress, and any blockers they've shared.",note:"Keep a simple sheet: name, goal, last contact date, next session."},
+    {id:"m2",icon:"📞",title:"Schedule or confirm next sessions",desc:"Reach out to confirm upcoming mentorship sessions. WhatsApp or call works best.",note:"Aim for at least 2 mentorship sessions per week."},
+    {id:"m3",icon:"📚",title:"Resource preparation",desc:"Prepare reading materials, exercises, or tools for your next mentorship session.",note:"Customize resources to each mentee's specific challenge."},
+    {id:"m4",icon:"✍️",title:"Session notes & follow-ups",desc:"Write brief notes from your last session. What was discussed? What action did the mentee commit to?",note:"Notes make you a dramatically better mentor over time."},
+    {id:"m5",icon:"📣",title:"Menta brand & outreach",desc:"One business development task: post one insight on LinkedIn/Instagram, or reach out to a potential new mentee.",note:"Consistency matters more than perfection for brand building."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#1A3A6A" gradEnd="#3B82F6" icon="🤝" title="Menta" subtitle="Mentorship Business" glowColor={color}>
+    <SectionHero icon="🤝" title="Menta" subtitle="Mentorship Business Operations" color={color} gradStart="#1A3A6A" gradEnd="#3B82F6" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:13,fontWeight:700,color:color,marginBottom:4}}>💡 Mentorship Philosophy</div>
+        <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.7}}>"The things you have heard me say... entrust to reliable people who will also be qualified to teach others." — 2 Timothy 2:2</div>
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#3B82F6">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Mentorship Tools</div>
+        {[{label:"Calendly (scheduling)",url:"https://calendly.com"},{label:"Notion (mentee tracker)",url:"https://notion.so"},{label:"GROW Model guide",url:"https://www.mindtools.com/pages/article/newLDR_89.htm"},{label:"ILO mentoring resources",url:"https://www.ilo.org"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// SUPPLYA PAGE
+// ════════════════════════════════════════════════════════════════
+function SupplyaPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("supplya-"+todayKey);
+  const color = "#7DD3FC";
+  const tasks = [
+    {id:"s1",icon:"📱",title:"App development progress check",desc:"Review what was built or designed since last session. Test latest features. Log any bugs.",note:"Even 30 min of focused progress daily compounds quickly."},
+    {id:"s2",icon:"🏫",title:"School director outreach",desc:"Contact 1–2 school directors today. Follow up on existing conversations or initiate new ones.",note:"Warm intro works best — ask current contacts for referrals."},
+    {id:"s3",icon:"📊",title:"Market research — school supply chains",desc:"Research one problem in the Kenyan school supply chain today. Read articles, talk to someone.",note:"Document insights in a shared Notion or Google Doc."},
+    {id:"s4",icon:"📝",title:"Pitch deck & documentation",desc:"Improve one slide or one page of your pitch documentation based on latest feedback.",note:"Keep a 'directors FAQ' doc — update it after every meeting."},
+    {id:"s5",icon:"💡",title:"Feature prioritisation",desc:"Review your app feature list. What's the MVP? Cut one feature that isn't core. Focus.",note:"Build for one school first — then scale the model."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#0F3460" gradEnd="#007AC8" icon="📦" title="Supplya" subtitle="School Supply Chain App" glowColor={color}>
+    <SectionHero icon="📦" title="Supplya" subtitle="School Supply Chain App" color={color} gradStart="#0F3460" gradEnd="#007AC8" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:13,fontWeight:700,color:color,marginBottom:4}}>🎯 Current Focus</div>
+        <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.7}}>Director outreach → Product validation → MVP build → Pilot school → Scale</div>
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#0EA5E9">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Build & Research Tools</div>
+        {[{label:"FlutterFlow (no-code app)",url:"https://flutterflow.io"},{label:"Airtable (data management)",url:"https://airtable.com"},{label:"Kenya MoE (ministry site)",url:"https://www.education.go.ke"},{label:"Notion (project management)",url:"https://notion.so"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// MUSIC / SAXOPHONE PAGE
+// ════════════════════════════════════════════════════════════════
+function MusicPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay();
+  const [done,toggle,count] = useChecklist("music-"+todayKey);
+  const [activeTrack, setActiveTrack] = useState(null);
+  const color = "#00D4FF";
+  const practiceSchedule = {
+    0:["Sight-reading practice (15 min)","Worship songs run-through (20 min)"],
+    1:["Long tones & tone quality (10 min)","Scales: all 12 major keys (15 min)","Etude or technical exercise (15 min)"],
+    2:["Jazz standards: learn 1 new lead sheet","Improvisation over backing track (20 min)"],
+    3:["Chromatic + interval exercises (10 min)","Altissimo register work (10 min)","Record yourself — review one piece"],
+    4:["Repertoire run-through: full pieces (30 min)"],
+    5:["Free play — play what you love (30 min)","Listen to a recording and transcribe one phrase"],
+    6:["Rest or light practice only"],
+  };
+  const dayTasks = practiceSchedule[dow]||practiceSchedule[1];
+  const tasks = [
+    {id:"mu0",icon:"🔧",title:"Instrument assembly & warm-up",desc:"Assemble sax, attach reed, do a 5-minute long tone warm-up. Don't skip this — it protects your embouchure.",note:"Check reed for chips or warping. Rotate reeds to extend life.",show:true},
+    ...dayTasks.map((t,i)=>({id:"mu"+(i+1),icon:"🎷",title:t,desc:"",show:true})),
+    {id:"mud",icon:"🎧",title:"Active listening — 15 min",desc:"Listen to a recording of a great saxophonist. Transcribe one phrase by ear or study their phrasing technique.",note:"Charlie Parker, John Coltrane, Grover Washington Jr. — pick your influence.",show:dow!==6},
+  ].filter(t=>t.show);
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#0A2040" gradEnd="#00A8D4" icon="🎷" title="Music" subtitle="Alto & Soprano Saxophone" glowColor={color}>
+    <SectionHero icon="🎷" title="Saxophone Practice" subtitle="Alto & Soprano · Daily Practice" color={color} gradStart="#0A2040" gradEnd="#00A8D4" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:12,color:color,fontWeight:700,marginBottom:4}}>📅 Practice Focus: {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][dow]}</div>
+        <div style={{fontSize:11,color:"#9CA3AF"}}>Recommended: 40–60 min · Consistency beats marathon sessions</div>
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#0088AA">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Music Resources</div>
+        {[{label:"iReal Pro (backing tracks)",url:"https://www.irealpro.com"},{label:"JazzAdvice (lessons)",url:"https://www.jazzadvice.com"},{label:"Musicnotes (sheet music)",url:"https://www.musicnotes.com"},{label:"YouTube: Adam Larson Sax",url:"https://youtube.com/@AdamLarsonMusic"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// TREES (HOBBY PLANT CARE) PAGE
+// ════════════════════════════════════════════════════════════════
+function TreesHobbyPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay();
+  const [done,toggle,count] = useChecklist("treeshobby-"+todayKey);
+  const color = "#4ADE80";
+  const isWaterDay = [1,4].includes(dow);
+  const tasks = [
+    {id:"th1",icon:"💧",title:isWaterDay?"Water plants (hobby collection)":"Check & observe plants",desc:isWaterDay?"Water your personal plant collection. Check soil, drainage, and leaf condition.":"Take 10 minutes to observe your plants. Any new growth? Any problems?",note:"Water in the morning when possible — reduces fungal issues.",show:true},
+    {id:"th2",icon:"🌱",title:"Propagation project",desc:"Check on any cuttings or propagations in progress. Change water if propagating in water.",note:"Monstera and pothos are among the easiest to propagate.",show:dow===0||dow===3||dow===6},
+    {id:"th3",icon:"📔",title:"Plant journal update",desc:"Write a quick note on any changes observed. New leaf unfurling? Pest spotted? Growth measurement.",note:"A simple notebook or phone notes app works perfectly.",show:dow===2||dow===5},
+    {id:"th4",icon:"🌿",title:"Fertilise if scheduled",desc:"If it's feeding week (every 2–4 weeks), mix a balanced liquid fertiliser at half strength and apply.",note:"Less is more with fertiliser — over-fertilising is more damaging than under.",show:dow===1},
+    {id:"th5",icon:"🧹",title:"Clean leaves & pots",desc:"Wipe large leaves with a damp cloth. Remove any dead plant matter from soil surface.",note:"Clean leaves absorb more light — plants genuinely grow better.",show:dow===6},
+  ].filter(t=>t.show);
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#064E3B" gradEnd="#4ADE80" icon="🌱" title="Trees" subtitle="Personal Plant Care" glowColor={color}>
+    <SectionHero icon="🌱" title="Trees & Plants" subtitle="Personal Plant Care Hobby" color={color} gradStart="#064E3B" gradEnd="#4ADE80" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>🌤️ {isWaterDay?"Watering day today":"Observation & maintenance day"} · Max 30 min</div></InfoCard>
+      {tasks.length > 0 ? tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>) : <div style={{textAlign:"center",padding:"30px 0",color:"#3A5A7A",fontSize:13}}>Enjoy your rest day 🌿<br/>Check in tomorrow.</div>}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// COOKING PAGE
+// ════════════════════════════════════════════════════════════════
+function CookingPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay();
+  const [done,toggle,count] = useChecklist("cooking-"+todayKey);
+  const color = "#FBBF24";
+  const mealIdeas = {
+    0:["Sunday Ugali & Beef Stew","Pilau with Kachumbari","Githeri with Avocado"],
+    1:["Chapati & Bean Stew","Rice & Chicken Curry","Mukimo"],
+    2:["Pasta with Tomato Sauce","Fried Rice with Veggies","Lentil Soup"],
+    3:["Nyama Choma prep","Skuma Wiki & Ugali","Fish Fillet & Fries"],
+    4:["Pilau & Raita","Vegetable Stew & Rice","Beans & Plantain"],
+    5:["Pizza Night","Burgers","Jollof Rice"],
+    6:["Meal prep for the week","Sunday Roast","Try a new recipe"],
+  };
+  const ideas = mealIdeas[dow]||mealIdeas[0];
+  const tasks = [
+    {id:"co1",icon:"📋",title:"Plan today's meal",desc:"Decide what to cook. Check what ingredients you have. Defrost protein if needed.",note:"Planning takes 5 minutes and saves 30 minutes of stress later."},
+    {id:"co2",icon:"🛒",title:"Check & restock pantry",desc:"Quick scan: do you have the staples? Onions, tomatoes, cooking oil, salt, spices?",note:"Keep a running shopping list on your phone."},
+    {id:"co3",icon:"🍳",title:"Cook today's main meal",desc:"Cook with intention. Try one new technique or flavour combination.",note:"Document good recipes in a notes app or food journal."},
+    {id:"co4",icon:"🧽",title:"Clean as you cook",desc:"Wash dishes, wipe surfaces, and clean stove after cooking. A clean kitchen invites you to cook again.",note:"The 'clean as you go' habit is the secret of all good cooks."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#78350F" gradEnd="#F59E0B" icon="🍳" title="Cooking" subtitle="Meals & Culinary Creativity" glowColor={color}>
+    <SectionHero icon="🍳" title="Cooking" subtitle="Nourish & Create" color={color} gradStart="#78350F" gradEnd="#F59E0B" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}>
+        <div style={{fontSize:12,color:color,fontWeight:700,marginBottom:6}}>💡 Meal Ideas for Today</div>
+        {ideas.map((m,i)=><div key={i} style={{fontSize:12,color:"#9CA3AF",padding:"3px 0"}}>🍽️ {m}</div>)}
+      </InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#D97706">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Cooking Resources</div>
+        {[{label:"African Bites (Kenyan recipes)",url:"https://www.africanbites.com"},{label:"YouTube: Joshua Weissman",url:"https://youtube.com/@JoshuaWeissman"},{label:"Yummly (recipe finder)",url:"https://www.yummly.com"},{label:"BBC Good Food",url:"https://www.bbcgoodfood.com"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 3D PRINTING PAGE
+// ════════════════════════════════════════════════════════════════
+function PrintingPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay();
+  const [done,toggle,count] = useChecklist("printing-"+todayKey);
+  const color = "#F87171";
+  const tasks = [
+    {id:"p1",icon:"🖨️",title:"Start or monitor a print job",desc:"Queue a print, check bed adhesion and first layer quality within the first 5 minutes.",note:"Never leave a print unattended for more than 2 hours at first.",show:true},
+    {id:"p2",icon:"🧹",title:"Printer maintenance",desc:"Clean the print bed with IPA. Check nozzle for clogs. Lubricate Z-axis lead screw weekly.",note:"A clean printer = reliable prints. Maintenance is 20% of the work.",show:dow===1||dow===5},
+    {id:"p3",icon:"🎨",title:"Design or download a model",desc:"Work on a custom design in Tinkercad/Fusion 360, or find a model on Printables/Thingiverse.",note:"Tinkercad is free and very beginner-friendly.",show:dow===0||dow===2||dow===4},
+    {id:"p4",icon:"💸",title:"Business development",desc:"Research products to print and sell. Check local demand, pricing competitors, material costs.",note:"Phone holders, cable organisers, and custom nameplates sell well locally.",show:dow===3||dow===6},
+    {id:"p5",icon:"🔬",title:"Post-processing finished prints",desc:"Sand, paint, or assemble any completed prints. Quality finish = premium product.",note:"Start with 120 grit sandpaper then move to 400 for smooth finish.",show:true},
+  ].filter(t=>t.show);
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#450A0A" gradEnd="#EF4444" icon="🖨️" title="3D Printing" subtitle="Hobby & Future Business" glowColor={color}>
+    <SectionHero icon="🖨️" title="3D Printing" subtitle="Hobby & Future Business" color={color} gradStart="#450A0A" gradEnd="#EF4444" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>🖨️ Track: Hobby → Business · Build skills, build catalogue, find first customers</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#DC2626">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 3D Printing Resources</div>
+        {[{label:"Printables.com (free models)",url:"https://www.printables.com"},{label:"Tinkercad (free design)",url:"https://www.tinkercad.com"},{label:"Bambu Studio (slicer)",url:"https://bambulab.com/en/software"},{label:"Teaching Tech (tutorials)",url:"https://youtube.com/@TeachingTech"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// CRAFTS PAGE
+// ════════════════════════════════════════════════════════════════
+function CraftsPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("crafts-"+todayKey);
+  const color = "#C084FC";
+  const tasks = [
+    {id:"cr1",icon:"🎨",title:"Set up workspace",desc:"Clear your table, lay out materials for today's project. A prepared workspace = creative flow.",note:"Keep a 'craft box' with frequently used supplies always ready."},
+    {id:"cr2",icon:"✂️",title:"Work on current project",desc:"Spend 30–45 min on your active craft project. Focus, create, enjoy.",note:"Set a timer — constraints actually boost creativity."},
+    {id:"cr3",icon:"📸",title:"Document your work",desc:"Photograph your progress or finished piece. Great for memory and for sharing.",note:"Good lighting makes a huge difference in craft photos."},
+    {id:"cr4",icon:"🧹",title:"Clean up & store materials",desc:"Put everything away properly. Label and store leftover materials.",note:"Organised supplies = quicker setup next time."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#3B0764" gradEnd="#A855F7" icon="✂️" title="Crafts" subtitle="Creative Handwork" glowColor={color}>
+    <SectionHero icon="✂️" title="Crafts" subtitle="Creative Handwork & Projects" color={color} gradStart="#3B0764" gradEnd="#A855F7" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>🎨 Craft time is soul time. Max 45 min · 2–3 times per week recommended</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#9333EA">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Inspiration & Resources</div>
+        {[{label:"Pinterest (craft ideas)",url:"https://pinterest.com"},{label:"Instructables (DIY guides)",url:"https://www.instructables.com"},{label:"YouTube: Sea Lemon (bookbinding)",url:"https://youtube.com/@SeaLemon"},{label:"Michaels (craft supplies)",url:"https://www.michaels.com"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// GAMES PAGE
+// ════════════════════════════════════════════════════════════════
+function GamesPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("games-"+todayKey);
+  const color = "#60A5FA";
+  const tasks = [
+    {id:"g1",icon:"⏱️",title:"Set a time limit before playing",desc:"Decide upfront: 30 or 45 minutes. Set an alarm. Games are meant to refresh, not consume.",note:"Treat gaming like any other scheduled activity — intentional and bounded."},
+    {id:"g2",icon:"🎮",title:"Game session",desc:"Enjoy your game fully within the time you've set. No guilt — this is intentional rest.",note:"Strategy games sharpen decision-making. Choose what you play with purpose."},
+    {id:"g3",icon:"🧠",title:"Reflect: what did you enjoy?",desc:"1 minute: what was fun about that session? This builds self-awareness about rest and play.",note:"If you feel drained after gaming, change what you play."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#1E3A5F" gradEnd="#3B82F6" icon="🎮" title="Games" subtitle="Intentional Leisure Play" glowColor={color}>
+    <SectionHero icon="🎮" title="Games" subtitle="Intentional Leisure · Max 45 min" color={color} gradStart="#1E3A5F" gradEnd="#3B82F6" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>🎮 Gaming is rest, not escapism. Keep it intentional. Keep it short.</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// MOVIES PAGE
+// ════════════════════════════════════════════════════════════════
+function MoviesPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("movies-"+todayKey);
+  const color = "#FB923C";
+  const recs = [
+    {title:"The Mission (1986)",genre:"Faith / Drama",note:"Stunning film about faith and sacrifice in South America"},
+    {title:"Hacksaw Ridge (2016)",genre:"Faith / War",note:"True story of courage without weapons"},
+    {title:"Moneyball (2011)",genre:"Business / Strategy",note:"Rethinking systems and underdog success"},
+    {title:"The Pursuit of Happyness",genre:"Business / Inspiration",note:"Resilience under pressure"},
+    {title:"Jiro Dreams of Sushi",genre:"Mastery / Craft",note:"The philosophy of excellence in one craft"},
+    {title:"Abstract: The Art of Design",genre:"Design / Creative",note:"Netflix series on creative mastery"},
+  ];
+  const tasks = [
+    {id:"mv1",icon:"📋",title:"Choose your film intentionally",desc:"Pick something that enriches, not just entertains. One documentary, one biopic, or one great drama.",note:"Avoid mindless scrolling — pick before you sit down."},
+    {id:"mv2",icon:"🎬",title:"Watch with full attention",desc:"No phone, no multitasking. Give the film your full presence.",note:"Films are stories. Stories form how we see the world."},
+    {id:"mv3",icon:"💬",title:"One takeaway after watching",desc:"Write or say one thing you learned, noticed, or felt. This makes watching active, not passive.",note:"Share it with someone — it deepens the experience."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#431407" gradEnd="#EA580C" icon="🎬" title="Movies" subtitle="Films & Entertainment" glowColor={color}>
+    <SectionHero icon="🎬" title="Movies & Film" subtitle="Stories that Enrich" color={color} gradStart="#431407" gradEnd="#EA580C" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label="🎬 Recommended for You" color={color}/>
+      {recs.map((r,i)=><div key={i} style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(16px)",borderRadius:14,padding:"12px 14px",marginBottom:8,border:"1px solid rgba(251,146,60,.14)"}}>
+        <div style={{fontSize:13,fontWeight:600,color:"#E8F4FF"}}>{r.title}</div>
+        <div style={{fontSize:11,color:color,marginTop:2}}>{r.genre}</div>
+        <div style={{fontSize:11,color:"#7A9CC0",marginTop:3}}>{r.note}</div>
+      </div>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// EXERCISE PAGE
+// ════════════════════════════════════════════════════════════════
+function ExercisePage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const dow = today.getDay();
+  const [done,toggle,count] = useChecklist("exercise-"+todayKey);
+  const color = "#34D399";
+  const workouts = {
+    0:["Rest & stretch only (20 min)","Light walk outside"],
+    1:["Upper body: Push-ups 4×15, Dips 3×12, Pike push-ups 3×10","Core: Plank 3×45s, Crunches 3×20, Leg raises 3×15"],
+    2:["Cardio: 20 min run or jump rope intervals","Cool-down stretch: 10 min"],
+    3:["Lower body: Squats 4×20, Lunges 3×12, Glute bridges 3×15","Core: Side planks 3×30s each side"],
+    4:["HIIT: 30s work / 15s rest × 8 rounds","Burpees, mountain climbers, jump squats, high knees"],
+    5:["Full body strength circuit (3 rounds)","Pull-ups or rows, Push-ups, Squats, Overhead press"],
+    6:["Active rest: 30 min walk or yoga","Mobility & flexibility work"],
+  };
+  const todayWorkout = workouts[dow]||workouts[1];
+  const tasks = [
+    {id:"ex0",icon:"🌡️",title:"Warm up (5–10 min)",desc:"Light jog in place, arm circles, leg swings, and dynamic stretches. Never skip warm-up.",note:"Cold muscles tear. 5 minutes of warm-up prevents weeks of injury."},
+    ...todayWorkout.map((w,i)=>({id:"ex"+(i+1),icon:"💪",title:w,desc:""})),
+    {id:"exc",icon:"💧",title:"Hydrate & cool down",desc:"Drink water immediately after. Do 5–10 min of static stretching focusing on muscles used.",note:"Aim for 2–3 litres of water on workout days."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#064E3B" gradEnd="#059669" icon="🏃" title="Exercise" subtitle="Physical Training" glowColor={color}>
+    <SectionHero icon="🏃" title="Exercise" subtitle={["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dow]+" Workout"} color={color} gradStart="#064E3B" gradEnd="#059669" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>💪 {["Rest Day","Upper Body","Cardio","Lower Body","HIIT","Full Body","Active Rest"][dow]} · Consistency over intensity</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// REST PAGE
+// ════════════════════════════════════════════════════════════════
+function RestPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("rest-"+todayKey);
+  const color = "#6EE7B7";
+  const tasks = [
+    {id:"r1",icon:"😴",title:"Sleep 7–8 hours",desc:"Target a consistent bedtime (10–10:30pm) and wake time. Quality sleep is the foundation of everything else.",note:"No screens 1 hour before bed. Blue light blocks melatonin."},
+    {id:"r2",icon:"🚫",title:"Digital sunset at 9pm",desc:"Put your phone face-down and switch to reading, journaling, or light conversation after 9pm.",note:"What you consume in the last hour of the day shapes your dreams and morning mood."},
+    {id:"r3",icon:"📖",title:"Evening reading (20 min)",desc:"Read something edifying, calming, or enjoyable. Not news, not work.",note:"Physical books or Kindle with warm light — avoid phone reading."},
+    {id:"r4",icon:"🙏",title:"Evening prayer & gratitude",desc:"End the day with prayer. Name 3 things you're grateful for from today.",note:"Gratitude shifts brain chemistry. It is both spiritual and scientific."},
+    {id:"r5",icon:"📝",title:"Tomorrow planning (5 min)",desc:"Write your top 3 tasks for tomorrow. This clears your mind and prevents 2am thinking.",note:"Put your phone on silent — not just vibrate — when you sleep."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#134E4A" gradEnd="#0D9488" icon="😴" title="Rest" subtitle="Sleep & Recovery" glowColor={color}>
+    <SectionHero icon="😴" title="Rest & Recovery" subtitle="Sleep is not laziness — it is stewardship" color={color} gradStart="#134E4A" gradEnd="#0D9488" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.7}}>"He grants sleep to those he loves." — Psalm 127:2</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// NUTRITION PAGE
+// ════════════════════════════════════════════════════════════════
+function NutritionPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("nutrition-"+todayKey);
+  const color = "#A7F3D0";
+  const tasks = [
+    {id:"n1",icon:"💧",title:"Drink water — start now",desc:"Target 2.5–3 litres today. Start with a full glass first thing in the morning before any food or coffee.",note:"Keep a 1-litre bottle visible on your desk. Seen = remembered."},
+    {id:"n2",icon:"🌅",title:"Eat breakfast within 1 hour of waking",desc:"Even something simple: eggs, fruit, oats, or avocado toast. Don't skip breakfast.",note:"A good breakfast stabilises blood sugar and improves morning focus."},
+    {id:"n3",icon:"🥗",title:"Eat vegetables with lunch",desc:"Aim for half your plate to be vegetables or legumes at lunch. Sukuma wiki, spinach, beans — all excellent.",note:"Kenyan traditional foods are extremely nutritious. Trust them."},
+    {id:"n4",icon:"🍎",title:"Healthy snack (not junk)",desc:"When hunger hits between meals: nuts, fruit, yoghurt, or boiled eggs instead of crisps or sweets.",note:"Prep snacks in advance — hunger decisions are the worst decisions."},
+    {id:"n5",icon:"🌙",title:"Light dinner — no eating after 8pm",desc:"Eat dinner before 7:30pm. Keep it lighter than lunch. Your body heals and rests better on an empty stomach.",note:"Consistent meal timing is as important as what you eat."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#064E3B" gradEnd="#34D399" icon="🥗" title="Nutrition" subtitle="Diet & Hydration" glowColor={color}>
+    <SectionHero icon="🥗" title="Nutrition" subtitle="Fuel Your Body Right" color={color} gradStart="#064E3B" gradEnd="#34D399" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>"Do you not know that your bodies are temples of the Holy Spirit?" — 1 Cor 6:19</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// MZURURO PAGE
+// ════════════════════════════════════════════════════════════════
+function MzururoPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("mzururo-"+todayKey);
+  const color = "#E879F9";
+  const nairobi = [
+    {name:"Karura Forest",type:"Nature walk",tip:"Great for morning walks. Free for residents."},
+    {name:"Ngong Road Forest",type:"Running trail",tip:"Popular jogging and cycling route."},
+    {name:"Two Rivers Mall",type:"Shopping & leisure",tip:"Good food court and lakeside walk."},
+    {name:"Nairobi National Park",type:"Safari",tip:"Unique urban safari just outside the city."},
+    {name:"Uhuru Park / Central Park",type:"Relaxation",tip:"Peaceful outdoor space in the city centre."},
+    {name:"Machakos Airport Area",type:"Local explore",tip:"Good supper spots and growing area near you."},
+  ];
+  const tasks = [
+    {id:"mz1",icon:"🗓️",title:"Plan today's outing",desc:"Decide where you're going, how long, who (if anyone) is joining you, and how you're getting there.",note:"Even a 1-hour walk locally counts as Mzururo. It refreshes the mind."},
+    {id:"mz2",icon:"📍",title:"Go — leave the house",desc:"Actually go. The planning was the hard part. Enjoy the change of environment.",note:"Take your phone for maps but keep it in your pocket — observe the world."},
+    {id:"mz3",icon:"📸",title:"Capture one memory",desc:"One photo, one note, one observation that was interesting about today's outing.",note:"Building a personal archive of your explorations is a gift to future-you."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#4A004A" gradEnd="#C026D3" icon="🚗" title="Mzururo" subtitle="Outings & Local Exploration" glowColor={color}>
+    <SectionHero icon="🚗" title="Mzururo" subtitle="Outings & Exploration" color={color} gradStart="#4A004A" gradEnd="#C026D3" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label="📍 Places to Explore (Nairobi / Machakos)" color={color}/>
+      {nairobi.map((p,i)=><div key={i} style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(16px)",borderRadius:14,padding:"12px 14px",marginBottom:8,border:"1px solid rgba(232,121,249,.14)"}}>
+        <div style={{fontSize:13,fontWeight:600,color:"#E8F4FF"}}>{p.name}</div>
+        <div style={{fontSize:11,color:color,marginTop:2}}>{p.type}</div>
+        <div style={{fontSize:11,color:"#7A9CC0",marginTop:3}}>{p.tip}</div>
+      </div>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// TRAVEL PAGE
+// ════════════════════════════════════════════════════════════════
+function TravelPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("travel-"+todayKey);
+  const color = "#C026D3";
+  const destinations = [
+    {place:"Mombasa",why:"Coast, culture, history — Fort Jesus, Old Town, Diani Beach"},
+    {place:"Maasai Mara",why:"World-famous wildlife reserve. Great Migration Aug–Oct"},
+    {place:"Lake Nakuru",why:"Flamingos, rhinos, and spectacular scenery. Easy day trip"},
+    {place:"Mount Kenya",why:"Trekking, camping — spiritual and physical challenge"},
+    {place:"Zanzibar, Tanzania",why:"Island escape, snorkelling, Swahili culture"},
+    {place:"Ethiopia (Addis Ababa)",why:"Rich history, incredible coffee culture, ancient churches"},
+  ];
+  const tasks = [
+    {id:"tr1",icon:"🗺️",title:"Plan or research next trip",desc:"Pick a destination and research costs, travel time, accommodation. Even 20 min of planning builds momentum.",note:"Book 3–4 weeks in advance for better prices."},
+    {id:"tr2",icon:"💰",title:"Set aside travel funds",desc:"Transfer a small amount to a dedicated 'travel' savings wallet or account today.",note:"Even 500 KES per week adds up to 26,000 KES per year."},
+    {id:"tr3",icon:"📋",title:"Update your travel bucket list",desc:"Add 1–2 new places you want to visit. Write why. This keeps the dream alive.",note:"Shared bucket lists with friends often become real trips."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#4A004A" gradEnd="#9333EA" icon="✈️" title="Travel" subtitle="Trips & Destinations" glowColor={color}>
+    <SectionHero icon="✈️" title="Travel" subtitle="Explore Kenya & Beyond" color={color} gradStart="#4A004A" gradEnd="#9333EA" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label="🌍 Bucket List Destinations" color={color}/>
+      {destinations.map((d,i)=><div key={i} style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(16px)",borderRadius:14,padding:"12px 14px",marginBottom:8,border:"1px solid rgba(192,38,211,.18)"}}>
+        <div style={{fontSize:13,fontWeight:600,color:"#E8F4FF"}}>{d.place}</div>
+        <div style={{fontSize:11,color:"#7A9CC0",marginTop:3}}>{d.why}</div>
+      </div>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// RELAX PAGE
+// ════════════════════════════════════════════════════════════════
+function RelaxPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("relax-"+todayKey);
+  const color = "#A21CAF";
+  const tasks = [
+    {id:"rl1",icon:"📴",title:"Phone down for 30 minutes",desc:"Put your phone face-down in another room. Just be present. No checking.",note:"The urge to check fades in 5–7 minutes. Push through it."},
+    {id:"rl2",icon:"☕",title:"Make and enjoy a drink slowly",desc:"Tea, coffee, or water. Make it intentionally. Sit and drink without doing anything else.",note:"This is a Japanese concept — 'ichi-go ichi-e': this moment, only once."},
+    {id:"rl3",icon:"🌿",title:"Spend 10 min in nature or silence",desc:"Sit outside, look at the sky, listen to birds. No agenda. Just presence.",note:"Nature exposure measurably reduces cortisol in under 10 minutes."},
+    {id:"rl4",icon:"🎵",title:"Listen to music intentionally",desc:"Put on music you love — not as background, but as the main activity. Full attention.",note:"Music is medicine. Use it deliberately."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#4A004A" gradEnd="#86198F" icon="🛋️" title="Relax" subtitle="Rest Your Mind" glowColor={color}>
+    <SectionHero icon="🛋️" title="Relaxation" subtitle="Rest · Presence · Peace" color={color} gradStart="#4A004A" gradEnd="#86198F" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>"Come to me, all you who are weary and burdened, and I will give you rest." — Matthew 11:28</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// SHOPPING PAGE
+// ════════════════════════════════════════════════════════════════
+function ShoppingPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("shopping-"+todayKey);
+  const [listItems, setListItems] = useState([]);
+  const [newShopItem, setNewShopItem] = useState("");
+  useEffect(()=>{ (async()=>{ const r=await sg("shoplist"); if(r?.value) setListItems(JSON.parse(r.value)); })(); },[]);
+  const addShopItem = () => { if(!newShopItem.trim()) return; const n=[...listItems,{id:Date.now(),text:newShopItem.trim(),bought:false}]; setListItems(n); ss("shoplist",JSON.stringify(n)); setNewShopItem(""); };
+  const toggleBought = (id) => { const n=listItems.map(x=>x.id===id?{...x,bought:!x.bought}:x); setListItems(n); ss("shoplist",JSON.stringify(n)); };
+  const clearBought = () => { const n=listItems.filter(x=>!x.bought); setListItems(n); ss("shoplist",JSON.stringify(n)); };
+  const color = "#60A5FA";
+  const tasks = [
+    {id:"sh1",icon:"📋",title:"Review shopping list before going",desc:"Don't shop without a list. Write every item needed before leaving the house.",note:"Unplanned shopping costs 30–40% more on average."},
+    {id:"sh2",icon:"💰",title:"Set a shopping budget",desc:"Decide your maximum spend before you enter any shop or open any app.",note:"Budget first, then shop. Not the other way around."},
+    {id:"sh3",icon:"🧾",title:"Keep your receipt",desc:"Photograph or file every receipt. This feeds directly into your budget tracking.",note:"Receipt photos in one WhatsApp group or Google Drive folder works perfectly."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#1E3A5F" gradEnd="#2563EB" icon="🛒" title="Shopping" subtitle="Track Purchases" glowColor={color}>
+    <SectionHero icon="🛒" title="Shopping" subtitle="Intentional Purchasing" color={color} gradStart="#1E3A5F" gradEnd="#2563EB" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label="🛒 Shopping List" color={color}/>
+      <div style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(18px)",borderRadius:18,padding:"14px 16px",border:"1px solid rgba(96,165,250,.18)",marginBottom:10}}>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <input value={newShopItem} onChange={e=>setNewShopItem(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addShopItem()} placeholder="Add item..." style={{flex:1,background:"rgba(18,28,46,.6)",border:"1px solid rgba(96,165,250,.2)",borderRadius:10,padding:"9px 12px",color:"#E8F4FF",fontSize:13,outline:"none"}}/>
+          <button onClick={addShopItem} style={{background:color,color:"#fff",border:"none",borderRadius:10,padding:"9px 16px",fontSize:13,fontWeight:700,cursor:"pointer"}}>+</button>
+        </div>
+        {listItems.length===0&&<div style={{textAlign:"center",color:"#3A5A7A",fontSize:12,padding:"10px 0"}}>Your list is empty</div>}
+        {listItems.map(item=><div key={item.id} onClick={()=>toggleBought(item.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",cursor:"pointer",borderBottom:"1px solid rgba(0,212,255,.06)"}}>
+          <div style={{width:20,height:20,borderRadius:10,border:`2px solid ${item.bought?color:"rgba(0,212,255,.2)"}`,background:item.bought?color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            {item.bought&&<span style={{color:"#fff",fontSize:11,fontWeight:800}}>✓</span>}
+          </div>
+          <span style={{fontSize:13,color:item.bought?"#3A5A7A":"#E8F4FF",textDecoration:item.bought?"line-through":"none"}}>{item.text}</span>
+        </div>)}
+        {listItems.some(x=>x.bought)&&<button onClick={clearBought} style={{marginTop:10,fontSize:11,color:"#F87171",background:"none",border:"1px solid rgba(248,113,113,.2)",borderRadius:8,padding:"5px 12px",cursor:"pointer",width:"100%"}}>Clear bought items</button>}
+      </div>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// BUDGET PAGE
+// ════════════════════════════════════════════════════════════════
+function BudgetPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("budget-"+todayKey);
+  const color = "#93C5FD";
+  const tasks = [
+    {id:"b1",icon:"📊",title:"Record today's expenses",desc:"Log every purchase made today. Even small ones — transport, food, airtime.",note:"Use a simple notes app if you don't have budgeting software."},
+    {id:"b2",icon:"📈",title:"Review this week's spending",desc:"Compare actual spending to your budget this week. Are you on track?",note:"Review weekly — not monthly. Monthly reviews find problems too late."},
+    {id:"b3",icon:"🗂️",title:"Categorise expenses",desc:"Sort this week's expenses: food, transport, business, personal, tithe, savings.",note:"Seeing the categories reveals spending patterns quickly."},
+    {id:"b4",icon:"✂️",title:"Identify one expense to cut",desc:"Is there one subscription, habit, or purchase you can eliminate or reduce this week?",note:"Small cuts compound. 200 KES/day saved = 73,000 KES/year."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#1E3A5F" gradEnd="#3B82F6" icon="📊" title="Budget" subtitle="Monthly Budget Review" glowColor={color}>
+    <SectionHero icon="📊" title="Budget" subtitle="Know Where Your Money Goes" color={color} gradStart="#1E3A5F" gradEnd="#3B82F6" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>"The plans of the diligent lead to profit as surely as haste leads to poverty." — Proverbs 21:5</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <InfoCard color="#2563EB">
+        <div style={{fontSize:12,fontWeight:700,color:color,marginBottom:6}}>🔗 Budget Tools</div>
+        {[{label:"Wave (free accounting)",url:"https://www.waveapps.com"},{label:"Wallet (expense tracker)",url:"https://budgetbakers.com"},{label:"Google Sheets Budget Template",url:"https://sheets.google.com"},{label:"YNAB (you need a budget)",url:"https://www.ynab.com"}].map(l=><a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:"block",fontSize:12,color:color,padding:"4px 0",textDecoration:"none"}}>→ {l.label}</a>)}
+      </InfoCard>
+    </div>
+  </StandardPage>;
+}
+
+// ════════════════════════════════════════════════════════════════
+// SAVINGS PAGE
+// ════════════════════════════════════════════════════════════════
+function SavingsPage({T,isDark,goBack,cycleTheme,themeIcon}) {
+  const today = new Date();
+  const todayKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+  const [done,toggle,count] = useChecklist("savings-"+todayKey);
+  const [goalName, setGoalName] = useState("");
+  const [goalAmt, setGoalAmt] = useState("");
+  const [savedAmt, setSavedAmt] = useState("");
+  const [goals, setGoals] = useState([]);
+  useEffect(()=>{ (async()=>{ const r=await sg("savingsgoals"); if(r?.value) setGoals(JSON.parse(r.value)); })(); },[]);
+  const addGoal = () => {
+    if(!goalName.trim()||!goalAmt) return;
+    const n=[...goals,{id:Date.now(),name:goalName,target:Number(goalAmt),saved:Number(savedAmt)||0}];
+    setGoals(n); ss("savingsgoals",JSON.stringify(n)); setGoalName(""); setGoalAmt(""); setSavedAmt("");
+  };
+  const color = "#BFDBFE";
+  const tasks = [
+    {id:"sv1",icon:"💰",title:"Transfer to savings today",desc:"Even a small amount. Move money to a savings account, M-Pesa savings wallet, or investment.",note:"Automate savings if possible — set a standing order for payday."},
+    {id:"sv2",icon:"📊",title:"Review savings progress",desc:"Check your savings balance and compare to your goals. Are you ahead or behind?",note:"Seeing progress is motivating. Check it weekly."},
+    {id:"sv3",icon:"🎯",title:"Update savings goals",desc:"Add a new goal or update progress on existing ones below.",note:"Name your goals — 'Holiday fund' beats 'savings account' for motivation."},
+    {id:"sv4",icon:"📈",title:"Research one investment",desc:"Spend 10 min reading about one savings or investment option available in Kenya.",note:"T-Bills, Money Market Funds, and SACCOs are great starting points."},
+  ];
+  const pct = tasks.length ? Math.round(count/tasks.length*100) : 0;
+  return <StandardPage T={T} isDark={isDark} goBack={goBack} cycleTheme={cycleTheme} themeIcon={themeIcon} gradStart="#1E3A5F" gradEnd="#1D4ED8" icon="💎" title="Savings" subtitle="Goals & Investments" glowColor={color}>
+    <SectionHero icon="💎" title="Savings & Goals" subtitle="Build for the Future" color={color} gradStart="#1E3A5F" gradEnd="#1D4ED8" pct={pct} done={count} total={tasks.length}/>
+    <div style={{padding:"16px 16px 40px"}}>
+      <InfoCard color={color}><div style={{fontSize:12,color:"#9CA3AF"}}>"Dishonest money dwindles away, but whoever gathers money little by little makes it grow." — Proverbs 13:11</div></InfoCard>
+      {tasks.map(t=><TaskCard key={t.id} {...t} color={color} done={!!done[t.id]} onToggle={()=>toggle(t.id)}/>)}
+      <SectionLabel label="🎯 Savings Goals" color={color}/>
+      {goals.map(g=>{
+        const pct2 = Math.min(100,Math.round(g.saved/g.target*100));
+        return <div key={g.id} style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(16px)",borderRadius:14,padding:"12px 14px",marginBottom:8,border:"1px solid rgba(191,219,254,.18)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:13,fontWeight:600,color:"#E8F4FF"}}>{g.name}</span>
+            <span style={{fontSize:11,color:color,fontWeight:700}}>{pct2}%</span>
+          </div>
+          <div style={{background:"rgba(255,255,255,.07)",borderRadius:99,height:5,overflow:"hidden",marginBottom:5}}>
+            <div style={{width:pct2+"%",height:"100%",background:color,borderRadius:99,transition:"width .4s"}}/>
+          </div>
+          <div style={{fontSize:11,color:"#7A9CC0"}}>Saved: KES {g.saved.toLocaleString()} / Target: KES {g.target.toLocaleString()}</div>
+        </div>;
+      })}
+      <div style={{background:"rgba(13,21,32,.7)",backdropFilter:"blur(16px)",borderRadius:14,padding:"14px 16px",border:"1px solid rgba(191,219,254,.14)"}}>
+        <div style={{fontSize:11,color:color,fontWeight:700,marginBottom:10}}>+ Add New Goal</div>
+        <input value={goalName} onChange={e=>setGoalName(e.target.value)} placeholder="Goal name (e.g. Holiday)" style={{width:"100%",background:"rgba(18,28,46,.6)",border:"1px solid rgba(191,219,254,.2)",borderRadius:10,padding:"9px 12px",color:"#E8F4FF",fontSize:13,outline:"none",marginBottom:8,display:"block",boxSizing:"border-box"}}/>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          <input value={goalAmt} onChange={e=>setGoalAmt(e.target.value)} placeholder="Target (KES)" type="number" style={{flex:1,background:"rgba(18,28,46,.6)",border:"1px solid rgba(191,219,254,.2)",borderRadius:10,padding:"9px 12px",color:"#E8F4FF",fontSize:13,outline:"none"}}/>
+          <input value={savedAmt} onChange={e=>setSavedAmt(e.target.value)} placeholder="Saved so far" type="number" style={{flex:1,background:"rgba(18,28,46,.6)",border:"1px solid rgba(191,219,254,.2)",borderRadius:10,padding:"9px 12px",color:"#E8F4FF",fontSize:13,outline:"none"}}/>
+        </div>
+        <button onClick={addGoal} style={{width:"100%",background:color,color:"#0F1E2E",border:"none",borderRadius:10,padding:"10px",fontSize:13,fontWeight:700,cursor:"pointer"}}>Add Goal</button>
+      </div>
+    </div>
+  </StandardPage>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUTE MAP — which item ID renders which component
+// ═══════════════════════════════════════════════════════════════════════════
+const STATIC_PAGES = {
+  church:      ChurchPage,
+  kyrioslearn: KyriosLearnPage,
+  treefriend:  TreefriendPage,
+  menta:       MentaPage,
+  supplya:     SupplyaPage,
+  music:       MusicPage,
+  trees:       TreesHobbyPage,
+  cooking:     CookingPage,
+  printing:    PrintingPage,
+  crafts:      CraftsPage,
+  games:       GamesPage,
+  movies:      MoviesPage,
+  exercise:    ExercisePage,
+  rest:        RestPage,
+  nutrition:   NutritionPage,
+  mzururo:     MzururoPage,
+  travel:      TravelPage,
+  relaxation:  RelaxPage,
+  shopping:    ShoppingPage,
+  budget:      BudgetPage,
+  savings:     SavingsPage,
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NAVIGATORS BIBLE READING PLAN DATA
+// ═══════════════════════════════════════════════════════════════════════════
+const NAV_PLAN={
+  1:["Matthew 1","Acts 1","Psalm 1","Genesis 1-2"],
+  2:["Matthew 2","Acts 2","Psalm 2","Genesis 3-4"],
+  3:["Matthew 3","Acts 3","Psalm 3","Genesis 5-7"],
+  4:["Matthew 4","Acts 4","Psalm 4","Genesis 8-10"],
+  5:["Matthew 5","Acts 5","Psalm 5","Genesis 11-13"],
+  6:["Matthew 6","Acts 6","Psalm 6","Genesis 14-16"],
+  7:["Matthew 7","Acts 7","Psalm 7","Genesis 17-18"],
+  8:["Matthew 8","Acts 8","Psalm 8","Genesis 19-20"],
+  9:["Matthew 9","Acts 9","Psalm 9","Genesis 21-23"],
+  10:["Matthew 10","Acts 10","Psalm 10","Genesis 24"],
+  11:["Matthew 11","Acts 11","Psalm 11","Genesis 25-26"],
+  12:["Matthew 12","Acts 12","Psalm 12","Genesis 27-28"],
+  13:["Matthew 13","Acts 13","Psalm 13","Genesis 29-30"],
+  14:["Matthew 14","Acts 14","Psalm 14","Genesis 31-32"],
+  15:["Matthew 15","Acts 15","Psalm 15","Genesis 33-35"],
+  16:["Matthew 16","Acts 16","Psalm 16","Genesis 36-37"],
+  17:["Matthew 17","Acts 17","Psalm 17","Genesis 38-40"],
+  18:["Matthew 18","Acts 18","Psalm 18","Genesis 41-42"],
+  19:["Matthew 19","Acts 19","Psalm 19","Genesis 43-45"],
+  20:["Matthew 20","Acts 20","Psalm 20","Genesis 46-47"],
+  21:["Matthew 21","Acts 21","Psalm 21","Genesis 48-50"],
+  22:["Matthew 22","Acts 22","Psalm 22","Exodus 1-3"],
+  23:["Matthew 23","Acts 23","Psalm 23","Exodus 4-6"],
+  24:["Matthew 24","Acts 24","Psalm 24","Exodus 7-9"],
+  25:["Matthew 25","Acts 25","Psalm 25","Exodus 10-12"],
+  26:["Matthew 26","Acts 26","Psalm 26","Exodus 13-15"],
+  27:["Matthew 27","Acts 27","Psalm 27","Exodus 16-18"],
+  28:["Matthew 28","Acts 28","Psalm 28","Exodus 19-21"],
+  29:["Mark 1","Romans 1","Psalm 29","Exodus 22-24"],
+  30:["Mark 2","Romans 2","Psalm 30","Exodus 25-27"],
+  31:["Mark 3","Romans 3","Psalm 31","Exodus 28-29"],
+  32:["Mark 4","Romans 4","Psalm 32","Exodus 30-32"],
+  33:["Mark 5","Romans 5","Psalm 33","Exodus 33-35"],
+  34:["Mark 6","Romans 6","Psalm 34","Exodus 36-38"],
+  35:["Mark 7","Romans 7","Psalm 35","Exodus 39-40"],
+  36:["Mark 8","Romans 8","Psalm 36","Leviticus 1-3"],
+  37:["Mark 9","Romans 9","Psalm 37","Leviticus 4-6"],
+  38:["Mark 10","Romans 10","Psalm 38","Leviticus 7-9"],
+  39:["Mark 11","Romans 11","Psalm 39","Leviticus 10-12"],
+  40:["Mark 12","Romans 12","Psalm 40","Leviticus 13"],
+  41:["Mark 13","Romans 13","Psalm 41","Leviticus 14-15"],
+  42:["Mark 14","Romans 14","Psalm 42","Leviticus 16-18"],
+  43:["Mark 15","Romans 15","Psalm 43","Leviticus 19-21"],
+  44:["Mark 16","Romans 16","Psalm 44","Leviticus 22-23"],
+  45:["Luke 1","1 Corinthians 1","Psalm 45","Leviticus 24-25"],
+  46:["Luke 2","1 Corinthians 2","Psalm 46","Leviticus 26-27"],
+  47:["Luke 3","1 Corinthians 3","Psalm 47","Numbers 1-2"],
+  48:["Luke 4","1 Corinthians 4","Psalm 48","Numbers 3-4"],
+  49:["Luke 5","1 Corinthians 5","Psalm 49","Numbers 5-6"],
+  50:["Luke 6","1 Corinthians 6","Psalm 50","Numbers 7"],
+  51:["Luke 7","1 Corinthians 7","Psalm 51","Numbers 8-10"],
+  52:["Luke 8","1 Corinthians 8","Psalm 52","Numbers 11-13"],
+  53:["Luke 9","1 Corinthians 9","Psalm 53","Numbers 14-15"],
+  54:["Luke 10","1 Corinthians 10","Psalm 54","Numbers 16-17"],
+  55:["Luke 11","1 Corinthians 11","Psalm 55","Numbers 18-19"],
+  56:["Luke 12","1 Corinthians 12","Psalm 56","Numbers 20-21"],
+  57:["Luke 13","1 Corinthians 13","Psalm 57","Numbers 22-24"],
+  58:["Luke 14","1 Corinthians 14","Psalm 58","Numbers 25-26"],
+  59:["Luke 15","1 Corinthians 15","Psalm 59","Numbers 27-29"],
+  60:["Luke 16","1 Corinthians 16","Psalm 60","Numbers 30-31"],
+  61:["Luke 17","2 Corinthians 1","Psalm 61","Numbers 32-33"],
+  62:["Luke 18","2 Corinthians 2","Psalm 62","Numbers 34-36"],
+  63:["Luke 19","2 Corinthians 3","Psalm 63","Deuteronomy 1-2"],
+  64:["Luke 20","2 Corinthians 4","Psalm 64","Deuteronomy 3-4"],
+  65:["Luke 21","2 Corinthians 5","Psalm 65","Deuteronomy 5-7"],
+  66:["Luke 22","2 Corinthians 6","Psalm 66","Deuteronomy 8-10"],
+  67:["Luke 23","2 Corinthians 7","Psalm 67","Deuteronomy 11-13"],
+  68:["Luke 24","2 Corinthians 8","Psalm 68","Deuteronomy 14-16"],
+  69:["John 1","2 Corinthians 9","Psalm 69","Deuteronomy 17-19"],
+  70:["John 2","2 Corinthians 10","Psalm 70","Deuteronomy 20-22"],
+  71:["John 3","2 Corinthians 11","Psalm 71","Deuteronomy 23-25"],
+  72:["John 4","2 Corinthians 12","Psalm 72","Deuteronomy 26-27"],
+  73:["John 5","2 Corinthians 13","Psalm 73","Deuteronomy 28-29"],
+  74:["John 6","Galatians 1","Psalm 74","Deuteronomy 30-31"],
+  75:["John 7","Galatians 2","Psalm 75","Deuteronomy 32-34"],
+  76:["John 8","Galatians 3","Psalm 76","Joshua 1-2"],
+  77:["John 9","Galatians 4","Psalm 77","Joshua 3-5"],
+  78:["John 10","Galatians 5","Psalm 78","Joshua 6-8"],
+  79:["John 11","Galatians 6","Psalm 79","Joshua 9-10"],
+  80:["John 12","Ephesians 1","Psalm 80","Joshua 11-13"],
+  81:["John 13","Ephesians 2","Psalm 81","Joshua 14-15"],
+  82:["John 14","Ephesians 3","Psalm 82","Joshua 16-18"],
+  83:["John 15","Ephesians 4","Psalm 83","Joshua 19-21"],
+  84:["John 16","Ephesians 5","Psalm 84","Joshua 22-24"],
+  85:["John 17","Ephesians 6","Psalm 85","Judges 1-2"],
+  86:["John 18","Philippians 1","Psalm 86","Judges 3-5"],
+  87:["John 19","Philippians 2","Psalm 87","Judges 6-7"],
+  88:["John 20","Philippians 3","Psalm 88","Judges 8-9"],
+  89:["John 21","Philippians 4","Psalm 89","Judges 10-12"],
+  90:["Matthew 1","Colossians 1","Psalm 90","Judges 13-15"],
+  91:["Matthew 2","Colossians 2","Psalm 91","Judges 16-18"],
+  92:["Matthew 3","Colossians 3","Psalm 92","Judges 19-21"],
+  93:["Matthew 4","Colossians 4","Psalm 93","Ruth 1-4"],
+  94:["Matthew 5","1 Thessalonians 1","Psalm 94","1 Samuel 1-3"],
+  95:["Matthew 6","1 Thessalonians 2","Psalm 95","1 Samuel 4-7"],
+  96:["Matthew 7","1 Thessalonians 3","Psalm 96","1 Samuel 8-10"],
+  97:["Matthew 8","1 Thessalonians 4","Psalm 97","1 Samuel 11-13"],
+  98:["Matthew 9","1 Thessalonians 5","Psalm 98","1 Samuel 14-15"],
+  99:["Matthew 10","2 Thessalonians 1","Psalm 99","1 Samuel 16-17"],
+  100:["Matthew 11","2 Thessalonians 2","Psalm 100","1 Samuel 18-20"],
+  101:["Matthew 12","2 Thessalonians 3","Psalm 101","1 Samuel 21-24"],
+  102:["Matthew 13","1 Timothy 1","Psalm 102","1 Samuel 25-27"],
+  103:["Matthew 14","1 Timothy 2","Psalm 103","1 Samuel 28-31"],
+  104:["Matthew 15","1 Timothy 3","Psalm 104","2 Samuel 1-3"],
+  105:["Matthew 16","1 Timothy 4","Psalm 105","2 Samuel 4-6"],
+  106:["Matthew 17","1 Timothy 5","Psalm 106","2 Samuel 7-9"],
+  107:["Matthew 18","1 Timothy 6","Psalm 107","2 Samuel 10-12"],
+  108:["Matthew 19","2 Timothy 1","Psalm 108","2 Samuel 13-15"],
+  109:["Matthew 20","2 Timothy 2","Psalm 109","2 Samuel 16-18"],
+  110:["Matthew 21","2 Timothy 3","Psalm 110","2 Samuel 19-21"],
+  111:["Matthew 22","2 Timothy 4","Psalm 111","2 Samuel 22-24"],
+  112:["Matthew 23","Titus 1","Psalm 112","1 Kings 1-2"],
+  113:["Matthew 24","Titus 2","Psalm 113","1 Kings 3-5"],
+  114:["Matthew 25","Titus 3","Psalm 114","1 Kings 6-7"],
+  115:["Matthew 26","Philemon 1","Psalm 115","1 Kings 8-9"],
+  116:["Matthew 27","Hebrews 1","Psalm 116","1 Kings 10-11"],
+  117:["Matthew 28","Hebrews 2","Psalm 117","1 Kings 12-14"],
+  118:["Mark 1","Hebrews 3","Psalm 118","1 Kings 15-17"],
+  119:["Mark 2","Hebrews 4","Psalm 119:1-48","1 Kings 18-19"],
+  120:["Mark 3","Hebrews 5","Psalm 119:49-104","1 Kings 20-22"],
+  121:["Mark 4","Hebrews 6","Psalm 119:105-176","2 Kings 1-3"],
+  122:["Mark 5","Hebrews 7","Psalm 120","2 Kings 4-6"],
+  123:["Mark 6","Hebrews 8","Psalm 121","2 Kings 7-9"],
+  124:["Mark 7","Hebrews 9","Psalm 122","2 Kings 10-12"],
+  125:["Mark 8","Hebrews 10","Psalm 123","2 Kings 13-15"],
+  126:["Mark 9","Hebrews 11","Psalm 124","2 Kings 16-18"],
+  127:["Mark 10","Hebrews 12","Psalm 125","2 Kings 19-21"],
+  128:["Mark 11","Hebrews 13","Psalm 126","2 Kings 22-25"],
+  129:["Mark 12","James 1","Psalm 127","1 Chronicles 1-2"],
+  130:["Mark 13","James 2","Psalm 128","1 Chronicles 3-5"],
+  131:["Mark 14","James 3","Psalm 129","1 Chronicles 6"],
+  132:["Mark 15","James 4","Psalm 130","1 Chronicles 7-9"],
+  133:["Mark 16","James 5","Psalm 131","1 Chronicles 10-12"],
+  134:["Luke 1","1 Peter 1","Psalm 132","1 Chronicles 13-15"],
+  135:["Luke 2","1 Peter 2","Psalm 133","1 Chronicles 16-18"],
+  136:["Luke 3","1 Peter 3","Psalm 134","1 Chronicles 19-21"],
+  137:["Luke 4","1 Peter 4","Psalm 135","1 Chronicles 22-24"],
+  138:["Luke 5","1 Peter 5","Psalm 136","1 Chronicles 25-27"],
+  139:["Luke 6","2 Peter 1","Psalm 137","1 Chronicles 28-29"],
+  140:["Luke 7","2 Peter 2","Psalm 138","2 Chronicles 1-3"],
+  141:["Luke 8","2 Peter 3","Psalm 139","2 Chronicles 4-6"],
+  142:["Luke 9","1 John 1","Psalm 140","2 Chronicles 7-9"],
+  143:["Luke 10","1 John 2","Psalm 141","2 Chronicles 10-12"],
+  144:["Luke 11","1 John 3","Psalm 142","2 Chronicles 13-16"],
+  145:["Luke 12","1 John 4","Psalm 143","2 Chronicles 17-19"],
+  146:["Luke 13","1 John 5","Psalm 144","2 Chronicles 20-22"],
+  147:["Luke 14","2 John 1","Psalm 145","2 Chronicles 23-25"],
+  148:["Luke 15","3 John 1","Psalm 146","2 Chronicles 26-28"],
+  149:["Luke 16","Jude 1","Psalm 147","2 Chronicles 29-31"],
+  150:["Luke 17","Revelation 1","Psalm 148","2 Chronicles 32-34"],
+  151:["Luke 18","Revelation 2","Psalm 149","2 Chronicles 35-36"],
+  152:["Luke 19","Revelation 3","Psalm 150","Ezra 1-4"],
+  153:["Luke 20","Revelation 4","Proverbs 1","Ezra 5-7"],
+  154:["Luke 21","Revelation 5","Proverbs 2","Ezra 8-10"],
+  155:["Luke 22","Revelation 6","Proverbs 3","Nehemiah 1-3"],
+  156:["Luke 23","Revelation 7","Proverbs 4","Nehemiah 4-6"],
+  157:["Luke 24","Revelation 8","Proverbs 5","Nehemiah 7-9"],
+  158:["John 1","Revelation 9","Proverbs 6","Nehemiah 10-11"],
+  159:["John 2","Revelation 10","Proverbs 7","Nehemiah 12-13"],
+  160:["John 3","Revelation 11","Proverbs 8","Esther 1-4"],
+  161:["John 4","Revelation 12","Proverbs 9","Esther 5-10"],
+  162:["John 5","Revelation 13","Proverbs 10","Job 1-4"],
+  163:["John 6","Revelation 14","Proverbs 11","Job 5-8"],
+  164:["John 7","Revelation 15","Proverbs 12","Job 9-12"],
+  165:["John 8","Revelation 16","Proverbs 13","Job 13-16"],
+  166:["John 9","Revelation 17","Proverbs 14","Job 17-20"],
+  167:["John 10","Revelation 18","Proverbs 15","Job 21-24"],
+  168:["John 11","Revelation 19","Proverbs 16","Job 25-30"],
+  169:["John 12","Revelation 20","Proverbs 17","Job 31-34"],
+  170:["John 13","Revelation 21","Proverbs 18","Job 35-38"],
+  171:["John 14","Revelation 22","Proverbs 19","Job 39-42"],
+  172:["John 15","Romans 1","Proverbs 20","Ecclesiastes 1-4"],
+  173:["John 16","Romans 2","Proverbs 21","Ecclesiastes 5-8"],
+  174:["John 17","Romans 3","Proverbs 22","Ecclesiastes 9-12"],
+  175:["John 18","Romans 4","Proverbs 23","Song of Solomon 1-4"],
+  176:["John 19","Romans 5","Proverbs 24","Song of Solomon 5-8"],
+  177:["John 20","Romans 6","Proverbs 25","Isaiah 1-4"],
+  178:["John 21","Romans 7","Proverbs 26","Isaiah 5-8"],
+  179:["Matthew 1","Romans 8","Proverbs 27","Isaiah 9-12"],
+  180:["Matthew 2","Romans 9","Proverbs 28","Isaiah 13-17"],
+  181:["Matthew 3","Romans 10","Proverbs 29","Isaiah 18-22"],
+  182:["Matthew 4","Romans 11","Proverbs 30","Isaiah 23-27"],
+  183:["Matthew 5","Romans 12","Proverbs 31","Isaiah 28-30"],
+  184:["Matthew 6","Romans 13","Psalm 1","Isaiah 31-35"],
+  185:["Matthew 7","Romans 14","Psalm 2","Isaiah 36-41"],
+  186:["Matthew 8","Romans 15","Psalm 3","Isaiah 42-44"],
+  187:["Matthew 9","Romans 16","Psalm 4","Isaiah 45-48"],
+  188:["Matthew 10","1 Corinthians 1","Psalm 5","Isaiah 49-53"],
+  189:["Matthew 11","1 Corinthians 2","Psalm 6","Isaiah 54-58"],
+  190:["Matthew 12","1 Corinthians 3","Psalm 7","Isaiah 59-63"],
+  191:["Matthew 13","1 Corinthians 4","Psalm 8","Isaiah 64-66"],
+  192:["Matthew 14","1 Corinthians 5","Psalm 9","Jeremiah 1-3"],
+  193:["Matthew 15","1 Corinthians 6","Psalm 10","Jeremiah 4-6"],
+  194:["Matthew 16","1 Corinthians 7","Psalm 11","Jeremiah 7-9"],
+  195:["Matthew 17","1 Corinthians 8","Psalm 12","Jeremiah 10-13"],
+  196:["Matthew 18","1 Corinthians 9","Psalm 13","Jeremiah 14-17"],
+  197:["Matthew 19","1 Corinthians 10","Psalm 14","Jeremiah 18-22"],
+  198:["Matthew 20","1 Corinthians 11","Psalm 15","Jeremiah 23-25"],
+  199:["Matthew 21","1 Corinthians 12","Psalm 16","Jeremiah 26-29"],
+  200:["Matthew 22","1 Corinthians 13","Psalm 17","Jeremiah 30-31"],
+  201:["Matthew 23","1 Corinthians 14","Psalm 18","Jeremiah 32-34"],
+  202:["Matthew 24","1 Corinthians 15","Psalm 19","Jeremiah 35-37"],
+  203:["Matthew 25","1 Corinthians 16","Psalm 20","Jeremiah 38-41"],
+  204:["Matthew 26","2 Corinthians 1","Psalm 21","Jeremiah 42-44"],
+  205:["Matthew 27","2 Corinthians 2","Psalm 22","Jeremiah 45-48"],
+  206:["Matthew 28","2 Corinthians 3","Psalm 23","Jeremiah 49-52"],
+  207:["Mark 1","2 Corinthians 4","Psalm 24","Lamentations 1-2"],
+  208:["Mark 2","2 Corinthians 5","Psalm 25","Lamentations 3-5"],
+  209:["Mark 3","2 Corinthians 6","Psalm 26","Ezekiel 1-4"],
+  210:["Mark 4","2 Corinthians 7","Psalm 27","Ezekiel 5-9"],
+  211:["Mark 5","2 Corinthians 8","Psalm 28","Ezekiel 10-13"],
+  212:["Mark 6","2 Corinthians 9","Psalm 29","Ezekiel 14-17"],
+  213:["Mark 7","2 Corinthians 10","Psalm 30","Ezekiel 18-20"],
+  214:["Mark 8","2 Corinthians 11","Psalm 31","Ezekiel 21-23"],
+  215:["Mark 9","2 Corinthians 12","Psalm 32","Ezekiel 24-27"],
+  216:["Mark 10","2 Corinthians 13","Psalm 33","Ezekiel 28-31"],
+  217:["Mark 11","Galatians 1","Psalm 34","Ezekiel 32-34"],
+  218:["Mark 12","Galatians 2","Psalm 35","Ezekiel 35-38"],
+  219:["Mark 13","Galatians 3","Psalm 36","Ezekiel 39-41"],
+  220:["Mark 14","Galatians 4","Psalm 37","Ezekiel 42-44"],
+  221:["Mark 15","Galatians 5","Psalm 38","Ezekiel 45-48"],
+  222:["Mark 16","Galatians 6","Psalm 39","Daniel 1-3"],
+  223:["Luke 1","Ephesians 1","Psalm 40","Daniel 4-6"],
+  224:["Luke 2","Ephesians 2","Psalm 41","Daniel 7-9"],
+  225:["Luke 3","Ephesians 3","Psalm 42","Daniel 10-12"],
+  226:["Luke 4","Ephesians 4","Psalm 43","Hosea 1-7"],
+  227:["Luke 5","Ephesians 5","Psalm 44","Hosea 8-14"],
+  228:["Luke 6","Ephesians 6","Psalm 45","Joel 1-3"],
+  229:["Luke 7","Philippians 1","Psalm 46","Amos 1-5"],
+  230:["Luke 8","Philippians 2","Psalm 47","Amos 6-9"],
+  231:["Luke 9","Philippians 3","Psalm 48","Obadiah 1"],
+  232:["Luke 10","Philippians 4","Psalm 49","Jonah 1-4"],
+  233:["Luke 11","Colossians 1","Psalm 50","Micah 1-4"],
+  234:["Luke 12","Colossians 2","Psalm 51","Micah 5-7"],
+  235:["Luke 13","Colossians 3","Psalm 52","Nahum 1-3"],
+  236:["Luke 14","Colossians 4","Psalm 53","Habakkuk 1-3"],
+  237:["Luke 15","1 Thessalonians 1","Psalm 54","Zephaniah 1-3"],
+  238:["Luke 16","1 Thessalonians 2","Psalm 55","Haggai 1-2"],
+  239:["Luke 17","1 Thessalonians 3","Psalm 56","Zechariah 1-7"],
+  240:["Luke 18","1 Thessalonians 4","Psalm 57","Zechariah 8-14"],
+  241:["Luke 19","1 Thessalonians 5","Psalm 58","Malachi 1-4"],
+  242:["Luke 20","2 Thessalonians 1","Psalm 59","Genesis 1-2"],
+  243:["Luke 21","2 Thessalonians 2","Psalm 60","Genesis 3-5"],
+  244:["Luke 22","2 Thessalonians 3","Psalm 61","Genesis 6-9"],
+  245:["Luke 23","1 Timothy 1","Psalm 62","Genesis 10-12"],
+  246:["Luke 24","1 Timothy 2","Psalm 63","Genesis 13-15"],
+  247:["John 1","1 Timothy 3","Psalm 64","Genesis 16-19"],
+  248:["John 2","1 Timothy 4","Psalm 65","Genesis 20-22"],
+  249:["John 3","1 Timothy 5","Psalm 66","Genesis 23-25"],
+  250:["John 4","1 Timothy 6","Psalm 67","Genesis 26-28"],
+  251:["John 5","2 Timothy 1","Psalm 68","Genesis 29-31"],
+  252:["John 6","2 Timothy 2","Psalm 69","Genesis 32-35"],
+  253:["John 7","2 Timothy 3","Psalm 70","Genesis 36-38"],
+  254:["John 8","2 Timothy 4","Psalm 71","Genesis 39-41"],
+  255:["John 9","Titus 1","Psalm 72","Genesis 42-44"],
+  256:["John 10","Titus 2","Psalm 73","Genesis 45-47"],
+  257:["John 11","Titus 3","Psalm 74","Genesis 48-50"],
+  258:["John 12","Philemon 1","Psalm 75","Exodus 1-3"],
+  259:["John 13","Hebrews 1","Psalm 76","Exodus 4-6"],
+  260:["John 14","Hebrews 2","Psalm 77","Exodus 7-9"],
+  261:["John 15","Hebrews 3","Psalm 78","Exodus 10-12"],
+  262:["John 16","Hebrews 4","Psalm 79","Exodus 13-15"],
+  263:["John 17","Hebrews 5","Psalm 80","Exodus 16-18"],
+  264:["John 18","Hebrews 6","Psalm 81","Exodus 19-21"],
+  265:["John 19","Hebrews 7","Psalm 82","Exodus 22-24"],
+  266:["John 20","Hebrews 8","Psalm 83","Exodus 25-28"],
+  267:["John 21","Hebrews 9","Psalm 84","Exodus 29-31"],
+  268:["Matthew 1","Hebrews 10","Psalm 85","Exodus 32-34"],
+  269:["Matthew 2","Hebrews 11","Psalm 86","Exodus 35-37"],
+  270:["Matthew 3","Hebrews 12","Psalm 87","Exodus 38-40"],
+  271:["Matthew 4","Hebrews 13","Psalm 88","Leviticus 1-4"],
+  272:["Matthew 5","James 1","Psalm 89","Leviticus 5-7"],
+  273:["Matthew 6","James 2","Psalm 90","Leviticus 8-10"],
+  274:["Matthew 7","James 3","Psalm 91","Leviticus 11-13"],
+  275:["Matthew 8","James 4","Psalm 92","Leviticus 14-15"],
+  276:["Matthew 9","James 5","Psalm 93","Leviticus 16-18"],
+  277:["Matthew 10","1 Peter 1","Psalm 94","Leviticus 19-21"],
+  278:["Matthew 11","1 Peter 2","Psalm 95","Leviticus 22-23"],
+  279:["Matthew 12","1 Peter 3","Psalm 96","Leviticus 24-25"],
+  280:["Matthew 13","1 Peter 4","Psalm 97","Leviticus 26-27"],
+  281:["Matthew 14","1 Peter 5","Psalm 98","Numbers 1-3"],
+  282:["Matthew 15","2 Peter 1","Psalm 99","Numbers 4-6"],
+  283:["Matthew 16","2 Peter 2","Psalm 100","Numbers 7-8"],
+  284:["Matthew 17","2 Peter 3","Psalm 101","Numbers 9-11"],
+  285:["Matthew 18","1 John 1","Psalm 102","Numbers 12-15"],
+  286:["Matthew 19","1 John 2","Psalm 103","Numbers 16-18"],
+  287:["Matthew 20","1 John 3","Psalm 104","Numbers 19-21"],
+  288:["Matthew 21","1 John 4","Psalm 105","Numbers 22-24"],
+  289:["Matthew 22","1 John 5","Psalm 106","Numbers 25-27"],
+  290:["Matthew 23","2 John 1","Psalm 107","Numbers 28-30"],
+  291:["Matthew 24","3 John 1","Psalm 108","Numbers 31-33"],
+  292:["Matthew 25","Jude 1","Psalm 109","Numbers 34-36"],
+  293:["Matthew 26","Revelation 1","Psalm 110","Deuteronomy 1-2"],
+  294:["Matthew 27","Revelation 2","Psalm 111","Deuteronomy 3-5"],
+  295:["Matthew 28","Revelation 3","Psalm 112","Deuteronomy 6-9"],
+  296:["Mark 1","Revelation 4","Psalm 113","Deuteronomy 10-12"],
+  297:["Mark 2","Revelation 5","Psalm 114","Deuteronomy 13-16"],
+  298:["Mark 3","Revelation 6","Psalm 115","Deuteronomy 17-20"],
+  299:["Mark 4","Revelation 7","Psalm 116","Deuteronomy 21-23"],
+  300:["Mark 5","Revelation 8","Psalm 117","Deuteronomy 24-27"]
+};
+
+// Book name → enduring word slug mapping
+function ewSlug(ref) {
+  const book = ref.split(" ").slice(0, -1).join("-").toLowerCase()
+    .replace("1 ","1-").replace("2 ","2-").replace("3 ","3-")
+    .replace("song of solomon","song-of-solomon")
+    .replace(" ","");
+  const chap = ref.split(" ").slice(-1)[0].split(":")[0].split("-")[0];
+  const bookMap = {
+    "matthew":"matthew","mark":"mark","luke":"luke","john":"john",
+    "acts":"acts","romans":"romans","1-corinthians":"1-corinthians",
+    "2-corinthians":"2-corinthians","galatians":"galatians","ephesians":"ephesians",
+    "philippians":"philippians","colossians":"colossians","1-thessalonians":"1-thessalonians",
+    "2-thessalonians":"2-thessalonians","1-timothy":"1-timothy","2-timothy":"2-timothy",
+    "titus":"titus","philemon":"philemon","hebrews":"hebrews","james":"james",
+    "1-peter":"1-peter","2-peter":"2-peter","1-john":"1-john","2-john":"2-john",
+    "3-john":"3-john","jude":"jude","revelation":"revelation",
+    "genesis":"genesis","exodus":"exodus","leviticus":"leviticus","numbers":"numbers",
+    "deuteronomy":"deuteronomy","joshua":"joshua","judges":"judges","ruth":"ruth",
+    "1-samuel":"1-samuel","2-samuel":"2-samuel","1-kings":"1-kings","2-kings":"2-kings",
+    "1-chronicles":"1-chronicles","2-chronicles":"2-chronicles","ezra":"ezra",
+    "nehemiah":"nehemiah","esther":"esther","job":"job","psalms":"psalm",
+    "psalm":"psalm","proverbs":"proverbs","ecclesiastes":"ecclesiastes",
+    "song-of-solomon":"song-of-solomon","isaiah":"isaiah","jeremiah":"jeremiah",
+    "lamentations":"lamentations","ezekiel":"ezekiel","daniel":"daniel",
+    "hosea":"hosea","joel":"joel","amos":"amos","obadiah":"obadiah",
+    "jonah":"jonah","micah":"micah","nahum":"nahum","habakkuk":"habakkuk",
+    "zephaniah":"zephaniah","haggai":"haggai","zechariah":"zechariah","malachi":"malachi"
+  };
+  const slug = bookMap[book] || book;
+  return `https://enduringword.com/bible-commentary/${slug}-${chap}/`;
+}
+
+// Calculate which plan day we are on (day of year, cycling 1-300)
+function getPlanDay(offsetDays=0) {
+  const start = new Date(new Date().getFullYear(), 0, 1);
+  const diff = Math.floor((Date.now() - start) / 86400000);
+  let d = ((diff + offsetDays) % 300) + 1;
+  if (d < 1) d += 300;
+  return d;
+}
+
+const TRACK_META = [
+  { key:0, label:"Gospels",      icon:"✝️",  color:"#A78BFA" },
+  { key:1, label:"Epistles",     icon:"📜",  color:"#38BDF8" },
+  { key:2, label:"Wisdom",       icon:"🕊️", color:"#FBBF24" },
+  { key:3, label:"Old Testament",icon:"📖",  color:"#34D399" },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEVOTIONS PAGE COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+function DevotionsPage({T, isDark, goBack, cycleTheme, themeIcon}) {
+  const todayPlanDay = getPlanDay(0);
+  const storageKey = "devot-day-" + new Date().getFullYear() + "-" + new Date().getMonth() + "-" + new Date().getDate();
+
+  const [planDay,    setPlanDay]    = useState(todayPlanDay);
+  const [readDone,   setReadDone]   = useState({});
+  const [commentary, setCommentary] = useState(null); // {url, ref}
+  const [showComm,   setShowComm]   = useState(false);
+  const [offsetDay,  setOffsetDay]  = useState(0);   // day navigation offset
+  const [noteText,   setNoteText]   = useState("");
+  const [savedNote,  setSavedNote]  = useState("");
+  const [noteSaved,  setNoteSaved]  = useState(false);
+
+  const readings = NAV_PLAN[planDay] || NAV_PLAN[1];
+  const doneCount = TRACK_META.filter(t => readDone[planDay+"-"+t.key]).length;
+  const pct = Math.round(doneCount / 4 * 100);
+
+  useEffect(() => {
+    (async () => {
+      const r = await sg("devot-done");
+      if (r?.value) setReadDone(JSON.parse(r.value));
+      const n = await sg("devot-note-"+storageKey);
+      if (n?.value) setSavedNote(n.value);
+    })();
+  }, []);
+
+  const toggleRead = (trackIdx) => {
+    const k = planDay+"-"+trackIdx;
+    const next = {...readDone, [k]: !readDone[k]};
+    setReadDone(next);
+    ss("devot-done", JSON.stringify(next));
+  };
+
+  const openCommentary = (ref) => {
+    setCommentary({url: ewSlug(ref), ref});
+    setShowComm(true);
+  };
+
+  const changeDay = (delta) => {
+    const newOffset = offsetDay + delta;
+    const newDay = getPlanDay(newOffset);
+    setOffsetDay(newOffset);
+    setPlanDay(newDay);
+  };
+
+  const saveNote = async () => {
+    await ss("devot-note-"+storageKey, noteText);
+    setSavedNote(noteText);
+    setNoteSaved(true);
+    setTimeout(() => setNoteSaved(false), 2000);
+  };
+
+  // 300-day progress dots (show 30 at a time centered on current)
+  const windowDays = [];
+  for (let i = -14; i <= 15; i++) {
+    let d = ((planDay - 1 + i + 300) % 300) + 1;
+    windowDays.push({d, offset: i, isToday: i === 0});
+  }
+
+  // Glass card style helper
+  const gc = (extra={}) => ({
+    background: T.taskBg,
+    backdropFilter: "blur(18px)",
+    WebkitBackdropFilter: "blur(18px)",
+    borderRadius: 18,
+    border: "1px solid " + T.glassBorder,
+    boxShadow: T.cardShadow,
+    ...extra
+  });
+
+  return (
+    <div style={{background:T.bg,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",position:"relative",overflow:"hidden",color:T.text,fontFamily:"'DM Sans',sans-serif"}}>
+      {/* Atmosphere */}
+      <div style={{position:"absolute",inset:0,overflow:"hidden",pointerEvents:"none",zIndex:0}}>
+        <Stars/><GridLines/>
+        <div style={{position:"absolute",top:"10%",left:"50%",width:280,height:280,borderRadius:"50%",background:"radial-gradient(circle,#A78BFA14 0%,transparent 70%)"}}/>
+        <div style={{position:"absolute",bottom:"20%",left:"10%",width:180,height:180,borderRadius:"50%",background:"radial-gradient(circle,#38BDF814 0%,transparent 70%)"}}/>
+      </div>
+
+      {/* Header */}
+      <div className="glass-header" style={{padding:"13px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50,background:T.headerBg,borderBottom:"1px solid "+T.glassBorder}}>
+        <button onClick={goBack} style={{width:36,height:36,borderRadius:10,background:T.btnBg,backdropFilter:"blur(14px)",border:"1px solid "+T.glassBorder,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>
+          <svg width="10" height="16" viewBox="0 0 10 16" fill="none"><path d="M8 2L2 8L8 14" stroke={T.text} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:2,color:"#A78BFA",textTransform:"uppercase"}}>Navigators Plan</div>
+          <div style={{fontSize:15,fontWeight:800,color:T.text}}>Personal Devotions</div>
+        </div>
+        <button onClick={cycleTheme} style={{width:36,height:36,borderRadius:18,background:T.btnBg,backdropFilter:"blur(12px)",border:"1px solid "+T.glassBorder,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,cursor:"pointer"}}>{themeIcon}</button>
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",paddingBottom:40,position:"relative",zIndex:1}}>
+
+        {/* Hero banner */}
+        <div style={{background:"linear-gradient(135deg,#4A1A8A,#A78BFA)",padding:"22px 20px 18px",position:"relative",overflow:"hidden",boxShadow:"0 6px 32px #4A1A8A55"}}>
+          <div style={{position:"absolute",top:-20,right:-20,width:100,height:100,borderRadius:"50%",background:"rgba(255,255,255,.1)"}}/>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:2.5,color:"rgba(255,255,255,.6)",textTransform:"uppercase",marginBottom:8}}>Bible in One Year · Day {planDay} of 300</div>
+          <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:14}}>📖 {new Date().toLocaleDateString("en-KE",{weekday:"long",month:"long",day:"numeric"})}</div>
+          <div style={{background:"rgba(255,255,255,.18)",borderRadius:99,height:8,overflow:"hidden",marginBottom:6}}>
+            <div style={{width:pct+"%",height:"100%",background:"rgba(255,255,255,.9)",borderRadius:99,transition:"width .5s"}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontSize:12,color:"rgba(255,255,255,.65)"}}>{doneCount} of 4 tracks read today</span>
+            <span style={{fontSize:12,fontWeight:700,color:"#fff"}}>{pct}%</span>
+          </div>
+        </div>
+
+        {/* Day navigator */}
+        <div style={{padding:"14px 16px 0"}}>
+          <div style={{...gc(), padding:"12px 14px",display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+            <button onClick={()=>changeDay(-1)} style={{background:"rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.3)",borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#A78BFA",fontSize:16,flexShrink:0}}>‹</button>
+            <div style={{flex:1,overflowX:"auto",display:"flex",gap:4,alignItems:"center",padding:"2px 0"}}>
+              {windowDays.map(({d,isToday})=>{
+                const done = TRACK_META.filter(t=>readDone[d+"-"+t.key]).length;
+                return (
+                  <button key={d} onClick={()=>{setPlanDay(d);setOffsetDay(d-todayPlanDay);}}
+                    style={{flexShrink:0,width:isToday?36:28,height:isToday?36:28,borderRadius:isToday?12:8,border:isToday?"2px solid #A78BFA":"1px solid "+T.glassBorder,background:isToday?"rgba(167,139,250,.25)":done===4?"rgba(167,139,250,.12)":"transparent",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:1,transition:"all .15s"}}>
+                    <span style={{fontSize:isToday?10:9,fontWeight:isToday?700:500,color:isToday?"#A78BFA":T.textMuted}}>{d}</span>
+                    {done>0&&<div style={{display:"flex",gap:1}}>{[...Array(done)].map((_,i)=><div key={i} style={{width:3,height:3,borderRadius:99,background:"#A78BFA"}}/>)}</div>}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>changeDay(1)} style={{background:"rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.3)",borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#A78BFA",fontSize:16,flexShrink:0}}>›</button>
+          </div>
+
+          {/* 4 track cards */}
+          <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Today's Readings — Day {planDay}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:16}}>
+            {TRACK_META.map((track)=>{
+              const ref = readings[track.key];
+              const done = readDone[planDay+"-"+track.key];
+              return (
+                <div key={track.key} style={{...gc({border:"1px solid "+(done?track.color+"44":T.glassBorder),opacity:done?.75:1}),padding:"14px 16px",overflow:"hidden"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    {/* Check circle */}
+                    <button onClick={()=>toggleRead(track.key)} style={{width:32,height:32,borderRadius:16,border:"2px solid "+(done?track.color:T.glassBorderStrong),background:done?track.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,cursor:"pointer",transition:"all .2s",boxShadow:done?"0 0 10px "+track.color+"55":"none"}}>
+                      {done&&<span style={{color:"#fff",fontSize:14,fontWeight:800}}>✓</span>}
+                    </button>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:10,fontWeight:700,color:track.color,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>{track.icon} {track.label}</div>
+                      <div style={{fontSize:16,fontWeight:700,color:done?T.textMuted:T.text,textDecoration:done?"line-through":"none"}}>{ref}</div>
+                    </div>
+                    {/* Commentary button */}
+                    <button onClick={()=>openCommentary(ref)} style={{width:36,height:36,borderRadius:10,background:"rgba(167,139,250,.12)",border:"1px solid rgba(167,139,250,.25)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}} title="Open Enduring Word commentary">
+                      <span style={{fontSize:16}}>💬</span>
+                    </button>
+                  </div>
+                  {/* Bible.com link */}
+                  <div style={{marginTop:10,marginLeft:44}}>
+                    <a href={"https://www.bible.com/bible/116/"+ref.replace(/ /g,".").replace(/:/g,".").toUpperCase()+".NLT"} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:11,color:track.color,textDecoration:"none",background:track.color+"18",padding:"4px 10px",borderRadius:99,border:"1px solid "+track.color+"33",display:"inline-flex",alignItems:"center",gap:4}}>
+                      📖 Read on Bible.com
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Enduring Word Commentary panel */}
+          {showComm && commentary && (
+            <div style={{...gc(),marginBottom:16,overflow:"hidden"}}>
+              <div style={{padding:"12px 16px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid "+T.glassBorder}}>
+                <div>
+                  <div style={{fontSize:10,fontWeight:700,color:"#A78BFA",letterSpacing:1,textTransform:"uppercase"}}>💬 Enduring Word Commentary</div>
+                  <div style={{fontSize:13,color:T.text,fontWeight:600,marginTop:2}}>{commentary.ref}</div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <a href={commentary.url} target="_blank" rel="noopener noreferrer"
+                    style={{fontSize:11,color:"#A78BFA",background:"rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.3)",padding:"5px 10px",borderRadius:8,textDecoration:"none",display:"flex",alignItems:"center",gap:4}}>
+                    ↗ Open
+                  </a>
+                  <button onClick={()=>setShowComm(false)} style={{background:"none",border:"1px solid "+T.glassBorder,borderRadius:8,width:30,height:30,color:T.textMuted,cursor:"pointer",fontSize:14}}>✕</button>
+                </div>
+              </div>
+              <div style={{position:"relative",height:420}}>
+                <iframe
+                  src={commentary.url}
+                  style={{width:"100%",height:"100%",border:"none",display:"block",background:"#fff"}}
+                  title={"Enduring Word: "+commentary.ref}
+                  sandbox="allow-same-origin allow-scripts allow-popups"
+                />
+                <div style={{position:"absolute",bottom:0,left:0,right:0,padding:"8px 12px",background:T.taskBg,backdropFilter:"blur(12px)",borderTop:"1px solid "+T.glassBorder,fontSize:10,color:T.textMuted,textAlign:"center"}}>
+                  Note: Some browsers block iframes. Tap "↗ Open" to view in a new tab.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Quick scripture notes */}
+          <div style={{...gc(),padding:"14px 16px",marginBottom:16}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#FBBF24",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>✍️ Today's Notes & Reflections</div>
+            <textarea
+              value={noteText||savedNote}
+              onChange={e=>setNoteText(e.target.value)}
+              placeholder="What is God saying to you today? Write key verses, insights, prayer points..."
+              style={{width:"100%",background:"transparent",border:"none",resize:"none",color:T.text,fontSize:13,fontFamily:"'DM Sans',sans-serif",lineHeight:1.7,outline:"none",minHeight:80,boxSizing:"border-box"}}
+              rows={4}
+            />
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>
+              <span style={{fontSize:11,color:T.textFaint}}>{savedNote?"Last saved ✓":"Not saved yet"}</span>
+              <button onClick={saveNote} style={{background:"#A78BFA",color:"#fff",border:"none",borderRadius:10,padding:"7px 16px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                {noteSaved?"Saved! ✓":"Save Note"}
+              </button>
+            </div>
+          </div>
+
+          {/* 5-week rolling progress grid */}
+          <div style={{...gc(),padding:"14px 16px"}}>
+            <div style={{fontSize:10,fontWeight:700,color:T.textMuted,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Recent Progress</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(10,1fr)",gap:4}}>
+              {Array.from({length:30},(_,i)=>{
+                const d = ((planDay - 1 - 29 + i + 300) % 300) + 1;
+                const done = TRACK_META.filter(t=>readDone[d+"-"+t.key]).length;
+                const isToday = d === planDay;
+                const bg = done===4?"#A78BFA":done===3?"#A78BFA99":done===2?"#A78BFA55":done===1?"#A78BFA22":"transparent";
+                return <div key={i} style={{aspectRatio:"1",borderRadius:4,background:bg,border:"1px solid "+(isToday?"#A78BFA":T.glassBorder),display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}} onClick={()=>{setPlanDay(d);}}>
+                  {isToday&&<div style={{width:4,height:4,borderRadius:99,background:"#A78BFA"}}/>}
+                </div>;
+              })}
+            </div>
+            <div style={{display:"flex",gap:14,marginTop:10,justifyContent:"center"}}>
+              {[{bg:"#A78BFA",l:"Complete"},{bg:"#A78BFA55",l:"Partial"},{bg:"transparent",l:"Not read"}].map(x=>(
+                <div key={x.l} style={{display:"flex",alignItems:"center",gap:5}}>
+                  <div style={{width:10,height:10,borderRadius:2,background:x.bg,border:"1px solid "+T.glassBorder}}/>
+                  <span style={{fontSize:9,color:T.textFaint}}>{x.l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
